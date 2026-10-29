@@ -321,6 +321,8 @@ CREATE INDEX IF NOT EXISTS refresh_tokens_expires_at_idx
 CREATE TABLE IF NOT EXISTS security_events (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
+  -- Adding a value here is a deliberate schema change, which is the point: the
+  -- set of things worth auditing should not drift silently.
   event_type  TEXT NOT NULL
               CONSTRAINT security_events_type_valid
               CHECK (event_type IN (
@@ -329,7 +331,12 @@ CREATE TABLE IF NOT EXISTS security_events (
                 'logout',
                 'session_compromised',
                 'rate_limit_exceeded',
-                'inquiry_status_changed'
+                'inquiry_status_changed',
+                -- An export removes personal data from the application's
+                -- boundary, so it is audited like a credential event.
+                'inquiry_exported',
+                'password_changed',
+                'admin_account_changed'
               )),
 
   -- SET NULL so an event outlives the account it refers to.
