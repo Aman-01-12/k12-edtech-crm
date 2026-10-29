@@ -12,6 +12,7 @@ import { sendPasswordResetEmail } from '../../lib/email.js';
 import {
   findLiveAdminCredentialByEmail,
   findLiveAdminCredentialById,
+  invalidateSessionsBefore,
   markSignedIn,
   updatePasswordHash,
 } from './admin.repository.js';
@@ -348,6 +349,9 @@ export async function changePassword(
   await withTransaction(async (client) => {
     await updatePasswordHash(admin.id, newHash, client);
     await revokeAllForAdmin(admin.id, client);
+    // Revoking refresh tokens stops renewal but leaves the current access
+    // token valid for its remaining lifetime; this ends it now.
+    await invalidateSessionsBefore(admin.id, client);
   });
 
   await recordSecurityEvent(
@@ -455,6 +459,10 @@ export async function redeemPasswordReset(
 
     await updatePasswordHash(adminRow.id, newHash, client);
     await revokeAllForAdmin(adminRow.id, client);
+    // A reset exists partly to evict whoever may already hold a live session,
+    // so the current access token has to stop working too, not just the
+    // ability to renew it.
+    await invalidateSessionsBefore(adminRow.id, client);
 
     return adminRow;
   });

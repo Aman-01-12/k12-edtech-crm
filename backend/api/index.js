@@ -681,11 +681,11 @@ async function verifyAccessToken(token) {
       requiredClaims: ["sub", "exp", "iat"]
     });
     const adminId = payload.sub;
-    const { email } = payload;
-    if (typeof adminId !== "string" || typeof email !== "string") {
+    const { email, iat } = payload;
+    if (typeof adminId !== "string" || typeof email !== "string" || typeof iat !== "number") {
       throw new TokenInvalidError();
     }
-    return { adminId, email };
+    return { adminId, email, issuedAt: new Date(iat * 1e3) };
   } catch (error) {
     if (error instanceof joseErrors.JWTExpired) {
       throw new TokenExpiredError();
@@ -802,7 +802,7 @@ async function findLiveAdminCredentialByEmail(email) {
 }
 async function findLiveAdminById(id) {
   const { rows } = await pool.query(
-    `select id, email, full_name, last_login_at, created_at
+    `select id, email, full_name, last_login_at, created_at, sessions_invalidated_at
        from admins
       where id = $1
         and deleted_at is null
@@ -810,6 +810,9 @@ async function findLiveAdminById(id) {
     [id]
   );
   return rows[0];
+}
+async function invalidateSessionsBefore(adminId, client = pool) {
+  await client.query(`update admins set sessions_invalidated_at = now() where id = $1`, [adminId]);
 }
 async function markSignedIn(adminId) {
   await pool.query(`update admins set last_login_at = now() where id = $1`, [adminId]);
@@ -862,6 +865,9 @@ async function findLiveAdminCredentialById(id) {
 }
 
 // src/middleware/require-admin.ts
+function toUnixSeconds(value) {
+  return Math.floor(value.getTime() / 1e3);
+}
 var requireAdmin = (req, _res, next) => {
   void (async () => {
     try {
@@ -876,6 +882,10 @@ var requireAdmin = (req, _res, next) => {
       const admin = await findLiveAdminById(claims.adminId);
       if (admin === void 0) {
         throw new TokenInvalidError("Your account is no longer active.");
+      }
+      const cutoff = admin.sessions_invalidated_at;
+      if (cutoff !== null && toUnixSeconds(claims.issuedAt) < toUnixSeconds(cutoff)) {
+        throw new TokenInvalidError("Your session ended because the password was changed.");
       }
       req.admin = { adminId: admin.id, email: admin.email, fullName: admin.full_name };
       next();
@@ -1636,6 +1646,7 @@ async function changePassword(input, context) {
   await withTransaction(async (client) => {
     await updatePasswordHash(admin.id, newHash, client);
     await revokeAllForAdmin(admin.id, client);
+    await invalidateSessionsBefore(admin.id, client);
   });
   await recordSecurityEvent(
     {
@@ -1692,6 +1703,7 @@ async function redeemPasswordReset(input, context) {
     }
     await updatePasswordHash(adminRow.id, newHash, client);
     await revokeAllForAdmin(adminRow.id, client);
+    await invalidateSessionsBefore(adminRow.id, client);
     return adminRow;
   });
   if (admin === void 0) {

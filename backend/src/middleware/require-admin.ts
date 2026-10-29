@@ -17,6 +17,10 @@ export interface AuthenticatedAdminPrincipal {
   fullName: string;
 }
 
+function toUnixSeconds(value: Date): number {
+  return Math.floor(value.getTime() / 1000);
+}
+
 /**
  * Verifies the token, then re-reads the account.
  *
@@ -47,6 +51,16 @@ export const requireAdmin: RequestHandler = (
       const admin = await findLiveAdminById(claims.adminId);
       if (admin === undefined) {
         throw new TokenInvalidError('Your account is no longer active.');
+      }
+
+      // Compared at whole-second resolution, which is all `iat` carries. A
+      // token minted in the same second as the cutoff is allowed, because the
+      // replacement session a password change issues is minted in that second
+      // and must survive its own cutoff. Any token from an earlier second,
+      // which is every pre-existing session, is refused.
+      const cutoff = admin.sessions_invalidated_at;
+      if (cutoff !== null && toUnixSeconds(claims.issuedAt) < toUnixSeconds(cutoff)) {
+        throw new TokenInvalidError('Your session ended because the password was changed.');
       }
 
       req.admin = { adminId: admin.id, email: admin.email, fullName: admin.full_name };

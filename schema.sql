@@ -108,6 +108,12 @@ CREATE TABLE IF NOT EXISTS admins (
 
   last_login_at TIMESTAMPTZ,
 
+  -- Access tokens issued at or before this instant are refused, which is what
+  -- makes a password change or reset end sessions *now* rather than when the
+  -- 15-minute JWT happens to expire. Revoking refresh tokens alone only stops
+  -- a session being renewed; it leaves the current access token working.
+  sessions_invalidated_at TIMESTAMPTZ,
+
   -- Soft delete. Accounts are never hard-deleted, because the security event log
   -- and the inquiry status trail reference them.
   deleted_at    TIMESTAMPTZ,
@@ -122,6 +128,11 @@ CREATE TABLE IF NOT EXISTS admins (
 CREATE UNIQUE INDEX IF NOT EXISTS admins_email_lower_key
   ON admins (LOWER(email))
   WHERE deleted_at IS NULL;
+
+-- `CREATE TABLE IF NOT EXISTS` above does nothing on a database that already
+-- has this table, so a column added after it first existed needs this to reach
+-- an existing deployment.
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS sessions_invalidated_at TIMESTAMPTZ;
 
 DROP TRIGGER IF EXISTS admins_set_updated_at ON admins;
 CREATE TRIGGER admins_set_updated_at

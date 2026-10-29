@@ -13,6 +13,11 @@ export interface AccessTokenClaims {
   email: string;
 }
 
+export interface VerifiedAccessToken extends AccessTokenClaims {
+  /** `iat`, as a Date, so a session cutoff can be compared against it. */
+  issuedAt: Date;
+}
+
 export async function signAccessToken(claims: AccessTokenClaims): Promise<string> {
   const issuedAt = Math.floor(Date.now() / 1000);
 
@@ -34,7 +39,7 @@ export async function signAccessToken(claims: AccessTokenClaims): Promise<string
  * @throws TokenExpiredError when genuine but expired, so the client refreshes.
  * @throws TokenInvalidError otherwise, so the client signs out.
  */
-export async function verifyAccessToken(token: string): Promise<AccessTokenClaims> {
+export async function verifyAccessToken(token: string): Promise<VerifiedAccessToken> {
   try {
     const { payload } = await jwtVerify(token, secretKey, {
       algorithms: [ALGORITHM],
@@ -44,12 +49,12 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenClaim
     });
 
     const adminId = payload.sub;
-    const { email } = payload;
-    if (typeof adminId !== 'string' || typeof email !== 'string') {
+    const { email, iat } = payload;
+    if (typeof adminId !== 'string' || typeof email !== 'string' || typeof iat !== 'number') {
       throw new TokenInvalidError();
     }
 
-    return { adminId, email };
+    return { adminId, email, issuedAt: new Date(iat * 1000) };
   } catch (error) {
     if (error instanceof joseErrors.JWTExpired) {
       throw new TokenExpiredError();

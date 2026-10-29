@@ -15,6 +15,10 @@ export interface AdminRecord extends Record<string, unknown> {
   created_at: Date;
 }
 
+export interface AdminAuthRecord extends AdminRecord {
+  sessions_invalidated_at: Date | null;
+}
+
 export interface AdminCredentialRecord extends Record<string, unknown> {
   id: string;
   email: string;
@@ -40,10 +44,14 @@ export async function findLiveAdminCredentialByEmail(
   return rows[0];
 }
 
-/** Called on every authenticated request; see `requireAdmin`. */
-export async function findLiveAdminById(id: string): Promise<AdminRecord | undefined> {
-  const { rows } = await pool.query<AdminRecord>(
-    `select id, email, full_name, last_login_at, created_at
+/**
+ * Called on every authenticated request; see `requireAdmin`. Carries
+ * `sessions_invalidated_at` because the middleware has to compare it against
+ * the presented token's `iat` on every request.
+ */
+export async function findLiveAdminById(id: string): Promise<AdminAuthRecord | undefined> {
+  const { rows } = await pool.query<AdminAuthRecord>(
+    `select id, email, full_name, last_login_at, created_at, sessions_invalidated_at
        from admins
       where id = $1
         and deleted_at is null
@@ -51,6 +59,21 @@ export async function findLiveAdminById(id: string): Promise<AdminRecord | undef
     [id],
   );
   return rows[0];
+}
+
+/**
+ * Marks every access token issued up to now as no longer acceptable.
+ *
+ * Called alongside revoking refresh tokens. Revocation alone stops a session
+ * being renewed but leaves the current access token valid until it expires,
+ * which is the wrong outcome for a password change or reset: both exist partly
+ * to evict someone who may already be holding a live session.
+ */
+export async function invalidateSessionsBefore(
+  adminId: string,
+  client: Queryable = pool,
+): Promise<void> {
+  await client.query(`update admins set sessions_invalidated_at = now() where id = $1`, [adminId]);
 }
 
 export async function markSignedIn(adminId: string): Promise<void> {
