@@ -1,0 +1,88 @@
+@import 'tailwindcss';
+
+/**
+ * Design tokens. Direction and rationale: docs/adr/0009-visual-design-direction.md.
+ *
+ * Slate and marigold: the writing slate of Indian primary schooling, and the
+ * marigold of celebration. Marigold is spent once per screen, on the single
+ * primary action.
+ */
+@theme {
+  --color-ink: #15303b;
+  --color-ink-muted: #4a6673;
+  --color-ink-faint: #7c949e;
+  --color-canvas: #eef3f5;
+  --color-surface: #ffffff;
+  --color-edge: #d4e0e5;
+
+  --color-marigold: #e8872e;
+  --color-marigold-deep: #b8641a;
+  --color-marigold-wash: #fdf1e4;
+
+  --color-sage: #3e7a68;
+  --color-sage-wash: #e6f1ed;
+  --color-clay: #a33b32;
+  --color-clay-wash: #fbeae8;
+
+  --font-display: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  --radius-card: 0.75rem;
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* A visible focus ring on every interactive element is a requirement, not a
+     default, so it is set here rather than left to each component. */
+  :focus-visible {
+    outline: 2px solid var(--color-marigold-deep);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* Honour a user's stated preference rather than animating regardless. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Visually hidden but available to assistive technology, for live regions
+     and for labels that would be redundant on screen. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+}

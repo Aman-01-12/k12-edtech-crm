@@ -1,0 +1,267 @@
+import { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { standardSchemaResolver } from '@hookform/resolvers/standard-schema';
+import {
+  HONEYPOT_FIELD,
+  INQUIRY_CATEGORIES,
+  INQUIRY_CATEGORY_LABELS,
+  MESSAGE_MAX_LENGTH,
+  USER_TYPES,
+  USER_TYPE_LABELS,
+  createInquirySchema,
+  type CreateInquiryInput,
+} from '@k12/contracts';
+import { ApiRequestError, api } from '../../lib/api-client';
+import { Button } from '../../components/Button';
+import { Field, controlClass } from '../../components/Field';
+
+/**
+ * The public inquiry form.
+ *
+ * Validates with the same schema the server enforces, so the feedback a visitor
+ * sees while typing is the rule that will actually be applied.
+ */
+
+type Phase = { kind: 'editing' } | { kind: 'submitted' } | { kind: 'failed'; message: string };
+
+/**
+ * A key per submission attempt, kept across retries of that attempt so a
+ * timeout followed by a retry produces one inquiry rather than two.
+ */
+function newIdempotencyKey(): string {
+  return crypto.randomUUID();
+}
+
+export function InquiryFormPage() {
+  const [phase, setPhase] = useState<Phase>({ kind: 'editing' });
+  const [idempotencyKey, setIdempotencyKey] = useState(newIdempotencyKey);
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setError,
+    setFocus,
+    watch,
+    formState: { errors, isSubmitting },
+  } = useForm<CreateInquiryInput>({
+    resolver: standardSchemaResolver(createInquirySchema),
+    mode: 'onBlur',
+    // The two selects are deliberately absent rather than set to undefined:
+    // exactOptionalPropertyTypes treats those as different, and an unselected
+    // enum has no valid default value to give it.
+    defaultValues: { fullName: '', email: '', phone: '', message: '' },
+  });
+
+  const messageLength = watch('message')?.length ?? 0;
+
+  const onSubmit = handleSubmit(
+    async (values) => {
+      try {
+        await api.post('/inquiries', values, { 'X-Idempotency-Key': idempotencyKey });
+        setPhase({ kind: 'submitted' });
+        reset();
+        // A fresh key, so the next inquiry is a new one rather than a replay.
+        setIdempotencyKey(newIdempotencyKey());
+      } catch (error) {
+        if (error instanceof ApiRequestError) {
+          // Attach server field errors to their fields, so a rule the client
+          // did not enforce still lands next to the input that caused it.
+          const fieldErrors = error.fieldErrors();
+          let attached = false;
+          for (const [field, messages] of Object.entries(fieldErrors)) {
+            if (field !== '_' && messages[0] !== undefined) {
+              setError(field as keyof CreateInquiryInput, { message: messages[0] });
+              attached = true;
+            }
+          }
+          setPhase(attached ? { kind: 'editing' } : { kind: 'failed', message: error.message });
+          return;
+        }
+        setPhase({ kind: 'failed', message: 'Something went wrong. Please try again.' });
+      }
+    },
+    (invalid) => {
+      // Focus the first field that failed, so a keyboard or screen-reader user
+      // is taken to the problem instead of having to hunt for it.
+      const first = Object.keys(invalid)[0];
+      if (first !== undefined) {
+        setFocus(first as keyof CreateInquiryInput);
+      }
+    },
+  );
+
+  if (phase.kind === 'submitted') {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-5 py-12">
+        <div
+          className="rounded-card border border-sage bg-sage-wash p-8 text-center"
+          role="status"
+          aria-live="polite"
+        >
+          <h1 className="font-display text-2xl font-bold text-ink">Enquiry sent</h1>
+          <p className="mt-3 text-ink-muted">
+            Thank you. The K12 Hunar team has your enquiry and will be in touch on the phone number
+            or email you gave us.
+          </p>
+          <div className="mt-6 flex justify-center">
+            <Button onClick={() => setPhase({ kind: 'editing' })}>Send another enquiry</Button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="mx-auto max-w-xl px-5 py-10 sm:py-16">
+      <header>
+        <p className="font-display text-sm font-semibold tracking-[0.18em] text-marigold-deep uppercase">
+          K12 Hunar
+        </p>
+        <h1 className="mt-2 font-display text-3xl font-bold text-ink sm:text-4xl">
+          Tell us what you need
+        </h1>
+        <p className="mt-3 text-ink-muted">
+          Scholarships, admissions, concerts, or anything else. Fill this in and the team will get
+          back to you.
+        </p>
+      </header>
+
+      {phase.kind === 'failed' ? (
+        <div
+          role="alert"
+          className="mt-6 rounded-lg border border-clay bg-clay-wash px-4 py-3 text-sm font-medium text-clay"
+        >
+          {phase.message}
+        </div>
+      ) : null}
+
+      <form
+        onSubmit={(event) => void onSubmit(event)}
+        noValidate
+        className="mt-8 flex flex-col gap-5"
+      >
+        <div className="grid gap-5 sm:grid-cols-2">
+          <Field label="I am a" error={errors.userType?.message} required>
+            {(a11y) => (
+              <select {...a11y} {...register('userType')} className={controlClass} defaultValue="">
+                <option value="" disabled>
+                  Select one
+                </option>
+                {USER_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {USER_TYPE_LABELS[type]}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+
+          <Field label="This is about" error={errors.category?.message} required>
+            {(a11y) => (
+              <select {...a11y} {...register('category')} className={controlClass} defaultValue="">
+                <option value="" disabled>
+                  Select one
+                </option>
+                {INQUIRY_CATEGORIES.map((category) => (
+                  <option key={category} value={category}>
+                    {INQUIRY_CATEGORY_LABELS[category]}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+        </div>
+
+        <Field label="Full name" error={errors.fullName?.message} required>
+          {(a11y) => (
+            <input
+              {...a11y}
+              {...register('fullName')}
+              type="text"
+              autoComplete="name"
+              placeholder="Priya Sharma"
+              className={controlClass}
+            />
+          )}
+        </Field>
+
+        <div className="grid gap-5 sm:grid-cols-2">
+          <Field label="Email" error={errors.email?.message} required>
+            {(a11y) => (
+              <input
+                {...a11y}
+                {...register('email')}
+                type="email"
+                autoComplete="email"
+                placeholder="priya@example.com"
+                className={controlClass}
+              />
+            )}
+          </Field>
+
+          <Field
+            label="Phone number"
+            error={errors.phone?.message}
+            hint="10-digit Indian mobile number"
+            required
+          >
+            {(a11y) => (
+              <input
+                {...a11y}
+                {...register('phone')}
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="98765 43210"
+                className={controlClass}
+              />
+            )}
+          </Field>
+        </div>
+
+        <Field
+          label="Your question"
+          error={errors.message?.message}
+          hint={`${messageLength} of ${MESSAGE_MAX_LENGTH} characters`}
+          required
+        >
+          {(a11y) => (
+            <textarea
+              {...a11y}
+              {...register('message')}
+              rows={5}
+              placeholder="Tell us what you would like to know."
+              className={`${controlClass} resize-y`}
+            />
+          )}
+        </Field>
+
+        {/*
+          Honeypot. Positioned off-screen rather than display:none, because some
+          bots skip hidden fields; aria-hidden and tabIndex -1 keep it away from
+          screen-reader and keyboard users. See middleware/honeypot.ts.
+        */}
+        <div aria-hidden="true" className="absolute left-[-9999px] h-0 w-0 overflow-hidden">
+          <label htmlFor={HONEYPOT_FIELD}>Website</label>
+          <input
+            id={HONEYPOT_FIELD}
+            type="text"
+            tabIndex={-1}
+            autoComplete="off"
+            {...register(HONEYPOT_FIELD)}
+          />
+        </div>
+
+        {/* Stacked on a phone: side by side, the helper text squeezed the
+            button until its label wrapped onto two lines. */}
+        <div className="mt-2 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-4">
+          <Button type="submit" variant="primary" busy={isSubmitting} busyLabel="Sending">
+            Send enquiry
+          </Button>
+          <p className="text-xs text-ink-faint">We only use these details to reply to you.</p>
+        </div>
+      </form>
+    </main>
+  );
+}
