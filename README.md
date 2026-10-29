@@ -455,6 +455,9 @@ Presenting a token that has already been rotated means either a replay or a stol
 Signing in again is the recovery.
 The event is written to the append-only `security_events` table.
 
+Revoking the family only stops renewal, so detection also stamps a session cutoff on the account, which is what makes the third call above fail rather than keep working until the access token expires.
+The cutoff compares against the token's `iat`, which JWT defines in whole seconds, so an access token minted in the same second as the rotation survives; the window is under a second and closing it would need a token claim finer than the standard provides.
+
 **8. Sign out.**
 
 ```sh
@@ -522,6 +525,8 @@ Two composite filter indexes were written, measured, and **removed**: the planne
 | Logs | structured JSON with credentials, tokens and cookie headers redacted by path |
 | Database TLS | certificate verified by default. An unverified connection is possible only by setting `DATABASE_SSL_NO_VERIFY`, which logs a warning on every boot - [ADR 0011](docs/adr/0011-database-tls-verification.md) |
 | CSV export | values beginning `= + - @` or a control character are neutralised, so a crafted message cannot execute as a formula when the file is opened in Excel |
+| Outbound email | the reply endpoint reads its recipient from the enquiry record and never from the request body, so an authenticated session cannot aim the operator's verified sending domain at an arbitrary address. The subject refuses control characters, so a newline cannot smuggle a `Bcc` header, and the body is escaped before it reaches the HTML part |
+| Per-object checks | a note may be deleted only by its author, enforced as a predicate in the `DELETE` rather than a read-then-compare, so there is no window between the check and the write. "Not yours" is answered identically to "no such note" |
 | Audit | sign-in success and failure, refresh reuse, rate-limit trips, status changes, exports and admin changes are written to an append-only table |
 
 ### Why the rate limiting is shaped the way it is
@@ -566,17 +571,27 @@ Beyond the gate, every behavioural claim in this README is backed by something t
 
 | | |
 |---|---|
-| Schema | 28 assertions over the live catalogue - every constraint, trigger, index and grant - on PostgreSQL 15 and 17 |
+| Unit | 180 Vitest tests, including 22 JWT forgery cases and the phone, CSV, cursor and `LIKE`-escaping edge cases |
+| Schema | 28 assertions over the live catalogue - every constraint, trigger, index and grant - on PostgreSQL 15 and 17, plus three consecutive applications to a freshly created database to prove idempotency |
+| SQL paths | 27 inquiry queries exercised against a real database: insert with and without an idempotency key, replay, status change with previous-status capture, assign and unassign, notes including the author-only delete, nine filter combinations across list, summary and export, the timeline, and keyset pagination |
 | Authentication | 15 live HTTP checks: sign-in, wrong password, unknown account, refresh rotation, replay detection, CSRF, logout, `/me` |
 | Inquiries | 49 live HTTP checks: validation per field, idempotency, filters, search, cursor paging, status transitions, CSV contents and headers |
 | Admin management | 33 live HTTP checks: create, duplicate, list, deactivate, self-deactivation, session revocation |
+| Password reset | live: identical response for a real and an unknown address, token row created only for the real one, provider reported the email delivered, redemption signs in, replay rejected, prior sessions and the old password both dead |
+| Record actions | live: detail 200, assignment 200, assignment to a nonexistent admin 400, note 201, empty note 400, note without CSRF 403, unauthenticated detail 401, own-note delete 204, repeat delete 404, combined status and owner filter 200, invalid status filter 400 |
+| Reply by email | live: reply 201 with the provider reporting delivered and the correct `Reply-To`; unauthenticated 401, missing CSRF 403, a body naming its own recipient 400, a newline in the subject 400, an empty body 400 |
 | Query plans | 15 `EXPLAIN (ANALYZE, BUFFERS)` runs against 200,000 rows, confirming the intended index was chosen |
-| Browser | 25 Playwright assertions over the real UI, plus screenshot review, which is how two visual defects were found and fixed: a clipped status label and a wrapping button |
-| Unit | 180 Vitest tests, including 22 JWT forgery cases and the phone, CSV, cursor and `LIKE`-escaping edge cases |
+| Browser | Playwright against the deployed site: the brief's own feature list re-checked end to end (22 checks), the record panel's actions driven through the UI, and screenshot review, which is how several visual defects were found and fixed |
+| Clean clone | `git clone` of the published repository, then `npm ci` (0 vulnerabilities), `npm run verify`, `npm run db:schema` against an empty database (7 tables created) and `npm run build`, all from only the documented steps |
 
-The test suite is in `tests/` and is deliberately excluded from this repository, per the submission instructions.
-`npm test` therefore passes as a no-op on a clean clone.
-The numbers above are what those tests reported when they ran.
+The test suite lives in `tests/` and is deliberately excluded from this repository, per the submission instructions.
+`npm test` therefore passes as a no-op on a clean clone, which is itself one of the checks above.
+Every number here is what the corresponding run actually reported.
+
+Two findings worth naming, because they are the reason this section exists rather than a claim that the code looks right:
+
+- A password reset left the pre-reset session working. Revoking refresh tokens stops a session being renewed but leaves the access token valid until it expires, which is the wrong outcome for an operation whose purpose includes evicting someone. Found by testing the live flow, fixed with a session-invalidation cutoff, retested.
+- The public submission broke with a 500 after the owner join was added, because `INSERT ... RETURNING` has no FROM clause to qualify the shared column list against. Found by the reported symptom, traced in the runtime log, and the 27-path SQL check above was written so that class of break cannot return silently.
 
 ---
 
@@ -615,7 +630,7 @@ The supplied CA is added to Node's bundled roots rather than replacing them, so 
 
 ## Decision records
 
-Eleven decisions that a reasonable engineer could have made differently are written up in [`docs/adr/`](docs/adr/), each naming the alternatives considered and the trade-off accepted.
+Fourteen decisions that a reasonable engineer could have made differently are written up in [`docs/adr/`](docs/adr/), each naming the alternatives considered and the trade-off accepted.
 The point is not to prove the choice was right, but to show it was a choice rather than a default.
 
 | | |
