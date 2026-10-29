@@ -29,10 +29,21 @@
 -- Extensions
 -- -----------------------------------------------------------------------------
 
+-- Extensions live in their own schema, never in `public`. An extension in
+-- `public` puts its functions on the default search path, where they can shadow
+-- or be shadowed by application objects. Supabase's own database linter flags
+-- `extension_in_public` for exactly this reason.
+CREATE SCHEMA IF NOT EXISTS extensions;
+
 -- Trigram indexing, which is what lets the dashboard's `ILIKE '%term%'` name and
 -- phone search use an index instead of scanning the table. Postgres cannot use a
 -- standard btree index for a leading-wildcard pattern.
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;
+
+-- Resolve `gin_trgm_ops` below whether pg_trgm ended up in `extensions` (a fresh
+-- database) or was already present in `public` (an existing one), so this script
+-- applies to both without a conditional.
+SET search_path = public, extensions;
 
 -- `gen_random_uuid()` is core since PostgreSQL 13, so pgcrypto is deliberately
 -- not required here.
@@ -44,12 +55,18 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- Maintains `updated_at` in the database rather than in application code, so the
 -- timestamp is correct no matter which client performed the update.
+--
+-- `SET search_path = ''` pins resolution at definition time. Without it, a role
+-- able to create an object in an earlier schema on the caller's search path
+-- could shadow a function this body calls and have it run with the trigger's
+-- privileges. Every reference is therefore schema-qualified.
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SET search_path = ''
 AS $$
 BEGIN
-  NEW.updated_at = NOW();
+  NEW.updated_at = pg_catalog.now();
   RETURN NEW;
 END;
 $$;
@@ -436,6 +453,7 @@ $$;
 CREATE OR REPLACE FUNCTION reject_mutation()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SET search_path = ''
 AS $$
 BEGIN
   RAISE EXCEPTION 'Table %.% is append-only; % is not permitted',
