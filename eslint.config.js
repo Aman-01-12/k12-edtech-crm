@@ -1,0 +1,174 @@
+// ESLint flat config.
+//
+// Three concerns live here, deliberately separate:
+//
+//   1. Type-checked TypeScript correctness rules across every workspace.
+//   2. Architectural layer boundaries for the backend, enforced as lint errors
+//      rather than left to review. Dependencies flow inward only:
+//          routes / middleware -> services -> repositories -> db
+//      with config, errors and @k12/contracts as leaves that import nothing
+//      above them. See .kiro/specs/edtech-crm-inquiry-system/design.md 1.1.
+//   3. eslint-config-prettier last, so formatting is owned solely by Prettier
+//      and never fights a lint rule.
+
+import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
+import prettier from 'eslint-config-prettier';
+import globals from 'globals';
+
+/**
+ * One rule per layer, naming the module patterns that layer may not import.
+ *
+ * Patterns match the import specifier. Backend modules import each other with
+ * relative ESM specifiers ending in `.js`, which is what the `*.js` suffixes
+ * below match against.
+ */
+const LAYER_BOUNDARIES = [
+  {
+    layer: 'db',
+    files: ['backend/src/db/**/*.ts'],
+    forbid: ['**/*.repository.js', '**/*.service.js', '**/*.routes.js', '**/middleware/*.js'],
+    reason: 'the pool and transaction helper must not know about any specific table or route',
+  },
+  {
+    layer: 'repository',
+    files: ['backend/src/**/*.repository.ts'],
+    forbid: ['**/*.service.js', '**/*.routes.js', '**/middleware/*.js', 'express'],
+    reason: 'a repository owns SQL only, and must not make policy decisions or touch HTTP',
+  },
+  {
+    layer: 'service',
+    files: ['backend/src/**/*.service.ts'],
+    forbid: ['**/*.routes.js', '**/middleware/*.js', 'express'],
+    reason: 'a service owns business rules only, and must never touch req or res',
+  },
+  {
+    layer: 'leaf',
+    files: ['backend/src/config/**/*.ts', 'backend/src/errors/**/*.ts'],
+    forbid: [
+      '**/*.repository.js',
+      '**/*.service.js',
+      '**/*.routes.js',
+      '**/middleware/*.js',
+      '**/db/*.js',
+    ],
+    reason: 'configuration and the error taxonomy are leaves and import nothing above them',
+  },
+];
+
+/** Builds the `no-restricted-imports` config object for one layer. */
+function layerBoundaryConfig({ layer, files, forbid, reason }) {
+  return {
+    files,
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: forbid.map((group) => ({
+            group: [group],
+            message: `Layer boundary violation: ${layer} may not import ${group}, because ${reason}. Dependencies flow inward only.`,
+          })),
+        },
+      ],
+    },
+  };
+}
+
+export default [
+  {
+    ignores: [
+      '**/dist/**',
+      '**/build/**',
+      '**/node_modules/**',
+      '**/coverage/**',
+      '**/.vercel/**',
+      '**/playwright-report/**',
+      '**/test-results/**',
+    ],
+  },
+
+  js.configs.recommended,
+
+  // Type-checked rules, scoped to the TypeScript we author.
+  ...tseslint.configs.recommendedTypeChecked.map((config) => ({
+    ...config,
+    files: ['packages/*/src/**/*.ts', 'backend/src/**/*.ts', 'frontend/src/**/*.{ts,tsx}'],
+  })),
+  {
+    files: ['packages/*/src/**/*.ts', 'backend/src/**/*.ts', 'frontend/src/**/*.{ts,tsx}'],
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      // A floating promise in a request handler is a silently dropped failure
+      // path, which the standards forbid outright.
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-misused-promises': 'error',
+      // `unknown` plus narrowing is always available, so an explicit `any` has
+      // to be argued for in a comment rather than slipped in.
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
+      // An unused value is either dead code or a mistake; both are blockers.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
+      'no-console': 'error',
+      eqeqeq: ['error', 'always', { null: 'ignore' }],
+      'no-restricted-syntax': [
+        'error',
+        {
+          // Configuration is parsed once in config/env.ts; reading the
+          // environment anywhere else defeats the fail-fast guarantee.
+          selector: 'MemberExpression[object.object.name="process"][object.property.name="env"]',
+          message:
+            'Read configuration from config/env.ts, which validates it at startup, rather than process.env directly.',
+        },
+      ],
+    },
+  },
+
+  // Backend layer boundaries, applied after the general rules so a violation is
+  // always an error regardless of the recommended set.
+  ...LAYER_BOUNDARIES.map(layerBoundaryConfig),
+
+  // config/env.ts is the one place allowed to read the environment.
+  {
+    files: ['backend/src/config/env.ts', 'backend/src/scripts/**/*.ts'],
+    rules: { 'no-restricted-syntax': 'off' },
+  },
+
+  // Scripts are command-line tools, so reporting to stdout is their purpose.
+  {
+    files: ['backend/src/scripts/**/*.ts'],
+    rules: { 'no-console': 'off' },
+  },
+
+  // Tests may reach across layers to set up their fixtures.
+  {
+    files: ['**/*.test.ts', '**/*.test.tsx', '**/tests/**/*.ts'],
+    rules: {
+      'no-restricted-imports': 'off',
+      '@typescript-eslint/no-non-null-assertion': 'off',
+    },
+  },
+
+  {
+    files: ['backend/src/**/*.ts', 'packages/*/src/**/*.ts'],
+    languageOptions: { globals: globals.node },
+  },
+  {
+    files: ['frontend/src/**/*.{ts,tsx}'],
+    languageOptions: { globals: globals.browser },
+  },
+  {
+    files: ['*.js', '*.mjs', '*.config.js', '*.config.ts'],
+    languageOptions: { globals: globals.node },
+  },
+
+  // MUST remain last so it wins over anything above.
+  prettier,
+];

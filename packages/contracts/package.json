@@ -1,0 +1,20 @@
+{
+  "name": "@k12/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Validation schemas and types shared by the backend and the frontend, so one rule cannot drift from the other.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "vitest": "4.1.12"
+  }
+}

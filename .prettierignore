@@ -1,0 +1,17 @@
+# Prettier owns formatting for everything we author in TypeScript, JavaScript,
+# JSON, CSS, HTML and YAML. Everything below is generated, vendored, or
+# hand-formatted on purpose.
+
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+package-lock.json
+.vercel/
+
+# Markdown is authored one sentence per line on purpose; Prettier must not reflow it.
+**/*.md
+
+# SQL formatting is hand-tuned for readability of the DDL.
+*.sql

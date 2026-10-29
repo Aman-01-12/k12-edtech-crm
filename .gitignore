@@ -1,0 +1,52 @@
+# Secrets. `.env` holds the real Supabase connection string and the JWT signing
+# secret, so it must never be committed. `.env.example` is deliberately un-ignored
+# below because it is a required deliverable: it carries variable names and
+# comments, never values.
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Gate caches, so eslint and prettier re-check only what changed
+.eslintcache
+.prettiercache
+
+# Test and coverage output
+coverage/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# Local tooling state
+.vercel/
+.vite/
+
+# Editor and OS cruft
+.DS_Store
+.idea/
+*.swp
+
+# Working material that must never ship in the submission. All of it normally
+# lives in the parent workspace folder, physically outside this repository;
+# these entries are a second guard in case a copy is ever made inside it.
+#
+# `docs/adr/` is deliberately NOT ignored: the decision records are part of the
+# submission. Only the imported standards and the agent scaffolding are excluded.
+.kiro/
+.agents/
+.superpowers/
+.review/
+docs/standards/
+docs/reference/
+AGENTS.md
+SYSTEM_PRINCIPLES.md
+CODE_REVIEW.md
+*.pdf
