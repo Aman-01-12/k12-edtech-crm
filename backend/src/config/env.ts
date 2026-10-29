@@ -121,7 +121,14 @@ const environmentSchema = z.object({
   RATE_LIMIT_SUBMIT_WINDOW_MS: positiveIntSchema.default(60_000),
   RATE_LIMIT_SUBMIT_MAX: positiveIntSchema.default(5),
   RATE_LIMIT_LOGIN_WINDOW_MS: positiveIntSchema.default(900_000),
+  // Failed attempts against one account. Within NCSC's 5-to-10 guidance for a
+  // lockout threshold, except this is a self-healing window rather than a
+  // lockout, so it cannot be used to deny a real user access indefinitely.
   RATE_LIMIT_LOGIN_MAX: positiveIntSchema.default(10),
+  // Failed attempts from one network, which is what catches credential
+  // stuffing across many accounts. Higher than the per-account limit because
+  // a school or office shares one address.
+  RATE_LIMIT_LOGIN_NETWORK_MAX: positiveIntSchema.default(50),
   RATE_LIMIT_REFRESH_WINDOW_MS: positiveIntSchema.default(900_000),
   RATE_LIMIT_REFRESH_MAX: positiveIntSchema.default(60),
   RATE_LIMIT_EXPORT_WINDOW_MS: positiveIntSchema.default(900_000),

@@ -38,8 +38,15 @@ export const loginResponseSchema = z.object({
 
 export type LoginResponse = z.output<typeof loginResponseSchema>;
 
+/** A full name, as used for an admin account. */
+const adminFullNameSchema = z
+  .string()
+  .trim()
+  .min(2, 'Full name must be at least 2 characters.')
+  .max(120, 'Full name must be 120 characters or fewer.');
+
 /**
- * Admin provisioning input, used only by the seeding script.
+ * Admin provisioning input, used by the seeding script.
  *
  * Unlike sign-in this does enforce password strength, because here the password
  * is being chosen rather than checked.
@@ -47,11 +54,45 @@ export type LoginResponse = z.output<typeof loginResponseSchema>;
 export const provisionAdminSchema = z.strictObject({
   email: emailSchema,
   password: newPasswordSchema,
-  fullName: z
-    .string()
-    .trim()
-    .min(2, 'Full name must be at least 2 characters.')
-    .max(120, 'Full name must be 120 characters or fewer.'),
+  fullName: adminFullNameSchema,
 });
 
 export type ProvisionAdmin = z.output<typeof provisionAdminSchema>;
+
+/**
+ * Creating an admin through the API.
+ *
+ * No password field: the server generates one and returns it exactly once, so a
+ * weak password cannot be chosen for someone else and the plaintext never has
+ * to travel in a request body.
+ */
+export const createAdminSchema = z.strictObject({
+  email: emailSchema,
+  fullName: adminFullNameSchema,
+});
+
+export type CreateAdmin = z.output<typeof createAdminSchema>;
+
+/**
+ * Changing one's own password.
+ *
+ * The current password is required, so possession of a session is not by itself
+ * enough to change the credential that session was established with.
+ */
+export const changePasswordSchema = z.strictObject({
+  currentPassword: loginPasswordSchema,
+  newPassword: newPasswordSchema,
+});
+
+export type ChangePassword = z.output<typeof changePasswordSchema>;
+
+/** An admin account as the management screen lists them. */
+export const adminSummarySchema = z.object({
+  id: z.uuid(),
+  email: z.string(),
+  fullName: z.string(),
+  lastLoginAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+});
+
+export type AdminSummary = z.output<typeof adminSummarySchema>;

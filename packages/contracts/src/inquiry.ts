@@ -16,7 +16,19 @@ export const createInquirySchema = z.strictObject({
   email: emailSchema,
   phone: phoneSchema,
   message: messageSchema,
+
+  /**
+   * Honeypot. Rendered off-screen and hidden from assistive technology, so a
+   * human never fills it and a bot that fills every input does. Declared here
+   * because the schema is strict and would otherwise reject the field outright,
+   * which would turn the trap into a plain validation error and tell the bot
+   * exactly what happened.
+   */
+  website: z.string().max(200).optional(),
 });
+
+/** The honeypot field name, shared so the form and the check cannot diverge. */
+export const HONEYPOT_FIELD = 'website' as const;
 
 /** What the client sends, before normalization. */
 export type CreateInquiryInput = z.input<typeof createInquirySchema>;
