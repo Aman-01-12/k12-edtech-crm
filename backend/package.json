@@ -1,0 +1,42 @@
+{
+  "name": "@k12/backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Express API: public inquiry submission plus a JWT-protected admin surface.",
+  "type": "module",
+  "main": "src/app.ts",
+  "scripts": {
+    "dev": "tsx watch --env-file=../.env src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "db:seed": "tsx --env-file=../.env src/scripts/seed-admin.ts",
+    "db:reset-password": "tsx --env-file=../.env src/scripts/reset-password.ts"
+  },
+  "dependencies": {
+    "@k12/contracts": "*",
+    "bcrypt": "6.0.0",
+    "compression": "1.8.2",
+    "cookie-parser": "1.4.7",
+    "cors": "2.8.6",
+    "express": "5.3.0",
+    "express-rate-limit": "8.7.1",
+    "helmet": "8.3.0",
+    "jose": "6.2.13",
+    "pg": "8.23.1",
+    "pino": "10.4.0",
+    "pino-http": "11.0.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "6.0.0",
+    "@types/compression": "1.8.1",
+    "@types/cookie-parser": "1.4.10",
+    "@types/cors": "2.8.19",
+    "@types/express": "5.0.6",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "@types/supertest": "7.2.1",
+    "supertest": "7.3.1",
+    "tsx": "4.23.15"
+  }
+}
