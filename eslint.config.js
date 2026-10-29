@@ -159,11 +159,15 @@ export default [
     rules: { 'no-console': 'off' },
   },
 
-  // Tests may reach across layers to set up their fixtures.
+  // Tests reach across layers to set up fixtures, and they must set the
+  // environment before the configuration module loads. The process.env rule
+  // exists to protect production code's fail-fast guarantee, which a test
+  // arranging its own environment is not doing.
   {
-    files: ['**/*.test.ts', '**/*.test.tsx', '**/tests/**/*.ts'],
+    files: ['**/*.test.ts', '**/*.test.tsx', 'tests/**/*.ts'],
     rules: {
       'no-restricted-imports': 'off',
+      'no-restricted-syntax': 'off',
       '@typescript-eslint/no-non-null-assertion': 'off',
     },
   },
