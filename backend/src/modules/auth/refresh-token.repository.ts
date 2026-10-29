@@ -1,16 +1,6 @@
 import { pool } from '../../db/pool.js';
 import type { Queryable } from '../../db/transaction.js';
 
-/**
- * Refresh-token persistence.
- *
- * The lookup here deliberately returns revoked rows, which is the opposite of
- * what most "find the active token" queries do. Rotation has to see a revoked
- * token to recognise it as a replay, and a query that filtered them out would
- * report the replay as a token that simply does not exist, destroying the theft
- * signal.
- */
-
 export interface RefreshTokenRecord extends Record<string, unknown> {
   id: string;
   admin_id: string;
@@ -20,9 +10,9 @@ export interface RefreshTokenRecord extends Record<string, unknown> {
 }
 
 /**
- * Finds a refresh token by digest, **including revoked rows**.
- *
- * See the note above: the revoked case is the one that matters most.
+ * Returns revoked rows deliberately. Rotation must see a revoked token to
+ * recognise a replay; filtering them out would report the replay as a token
+ * that never existed and destroy the theft signal.
  */
 export async function findByHashIncludingRevoked(
   tokenHash: Buffer,
@@ -38,7 +28,6 @@ export async function findByHashIncludingRevoked(
   return rows[0];
 }
 
-/** Issues a refresh token row. `predecessorId` links it into its rotation chain. */
 export async function insertRefreshToken(
   input: {
     adminId: string;
@@ -69,19 +58,12 @@ export async function insertRefreshToken(
 
   const id = rows[0]?.id;
   if (id === undefined) {
-    // An insert with `returning` that yields no row means the statement did not
-    // do what it claimed, which must not be treated as success.
     throw new Error('Refresh token insert returned no row');
   }
   return id;
 }
 
-/**
- * Revokes one token.
- *
- * Guarded on `revoked_at is null` so the operation is idempotent and a double
- * rotation cannot overwrite the original revocation timestamp.
- */
+/** Guarded on `revoked_at is null` so a double rotation cannot overwrite the timestamp. */
 export async function revokeToken(id: string, client: Queryable = pool): Promise<boolean> {
   const { rowCount } = await client.query(
     `update refresh_tokens set revoked_at = now() where id = $1 and revoked_at is null`,
@@ -91,11 +73,8 @@ export async function revokeToken(id: string, client: Queryable = pool): Promise
 }
 
 /**
- * Revokes every token in a family.
- *
- * The theft response: presenting an already-rotated token means a token was
- * captured, so every descendant of that sign-in is destroyed rather than just
- * the one presented.
+ * The theft response: a replayed token means one was captured, so every
+ * descendant of that sign-in is destroyed, not just the one presented.
  */
 export async function revokeFamily(familyId: string, client: Queryable = pool): Promise<number> {
   const { rowCount } = await client.query(
@@ -105,7 +84,6 @@ export async function revokeFamily(familyId: string, client: Queryable = pool): 
   return rowCount ?? 0;
 }
 
-/** Revokes every active token for an admin. Used by sign-out-everywhere paths. */
 export async function revokeAllForAdmin(
   adminId: string,
   client: Queryable = pool,

@@ -3,33 +3,16 @@ import { SignJWT, errors as joseErrors, jwtVerify } from 'jose';
 import { config } from '../../config/env.js';
 import { TokenExpiredError, TokenInvalidError } from '../../errors/app-error.js';
 
-/**
- * Access-token signing and verification, and refresh-token generation.
- *
- * Two properties are non-negotiable here.
- *
- * The algorithm, issuer and audience are named on signing and *required* on
- * verification. Verifying without pinning the algorithm is what permits the
- * `alg: none` and algorithm-substitution forgeries, and verifying without
- * issuer and audience means a token minted for another system by the same
- * secret would be accepted.
- *
- * The refresh token is opaque random bytes rather than a JWT, because a JWT is
- * valid by virtue of verifying and therefore cannot be revoked. Only its
- * SHA-256 digest is ever stored.
- */
-
 const ALGORITHM = 'HS256';
+const REFRESH_TOKEN_BYTES = 32;
 
 const secretKey = new TextEncoder().encode(config.JWT_SECRET);
 
 export interface AccessTokenClaims {
-  /** The admin's id. */
   adminId: string;
   email: string;
 }
 
-/** Signs an access token carrying the admin's identity. */
 export async function signAccessToken(claims: AccessTokenClaims): Promise<string> {
   const issuedAt = Math.floor(Date.now() / 1000);
 
@@ -44,18 +27,16 @@ export async function signAccessToken(claims: AccessTokenClaims): Promise<string
 }
 
 /**
- * Verifies an access token.
+ * Pinning the algorithm, issuer and audience is what closes the `alg: none` and
+ * algorithm-substitution forgeries, and rejects a token minted for another
+ * system with the same secret.
  *
- * @throws TokenExpiredError when the token is genuine but past its expiry, so
- *   the client can refresh and replay.
- * @throws TokenInvalidError for anything else, so the client signs out. The two
- *   are distinct because the correct client reaction differs.
+ * @throws TokenExpiredError when genuine but expired, so the client refreshes.
+ * @throws TokenInvalidError otherwise, so the client signs out.
  */
 export async function verifyAccessToken(token: string): Promise<AccessTokenClaims> {
   try {
     const { payload } = await jwtVerify(token, secretKey, {
-      // A single-entry allow-list. Anything else, including an unsigned token,
-      // fails before the signature is even considered.
       algorithms: [ALGORITHM],
       issuer: config.JWT_ISSUER,
       audience: config.JWT_AUDIENCE,
@@ -80,44 +61,31 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenClaim
   }
 }
 
-/** Bytes of entropy in a refresh token. 32 is well beyond brute-force reach. */
-const REFRESH_TOKEN_BYTES = 32;
-
 export interface GeneratedRefreshToken {
   /** Returned to the client once, in a cookie, and never stored. */
   token: string;
-  /** What the database holds. */
   tokenHash: Buffer;
 }
 
 /**
- * Mints a refresh token and its digest.
- *
- * A plain SHA-256 rather than bcrypt is correct here: the input is 32 bytes of
- * CSPRNG output, so there is no low-entropy guess space for a slow hash to
- * defend, and a fast digest keeps the rotation path cheap.
+ * Opaque random bytes, not a JWT, because a JWT is valid by virtue of verifying
+ * and so cannot be revoked. A plain SHA-256 is right for the digest: the input
+ * is 32 bytes of CSPRNG output, so there is no guess space to slow down.
  */
 export function generateRefreshToken(): GeneratedRefreshToken {
   const token = randomBytes(REFRESH_TOKEN_BYTES).toString('base64url');
   return { token, tokenHash: hashRefreshToken(token) };
 }
 
-/** Digests a refresh token for lookup or storage. */
 export function hashRefreshToken(token: string): Buffer {
   return createHash('sha256').update(token, 'utf8').digest();
 }
 
-/** A CSRF token the client may read and echo back in a header. */
 export function generateCsrfToken(): string {
   return randomBytes(32).toString('base64url');
 }
 
-/**
- * Compares two CSRF tokens without leaking their relationship through timing.
- *
- * Length is compared first because `timingSafeEqual` throws on a length
- * mismatch; that comparison reveals only the length, which is a constant here.
- */
+/** Length is checked first because `timingSafeEqual` throws on a mismatch. */
 export function csrfTokensMatch(a: string, b: string): boolean {
   const left = Buffer.from(a, 'utf8');
   const right = Buffer.from(b, 'utf8');

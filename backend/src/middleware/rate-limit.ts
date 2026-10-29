@@ -6,11 +6,13 @@ import { normalizeClientAddress, rateLimitKey } from '../lib/client-identity.js'
 import { createRateLimitStore, logRateLimitProblem } from '../lib/postgres-rate-limit-store.js';
 
 /**
- * express-rate-limit attaches its per-request info under a configurable
- * property and types it through its own `AugmentedRequest` rather than
- * augmenting Express. Declaring it here lets the handler read `resetTime`
- * without a cast.
+ * Limiters keyed on the most specific identity available, because every less
+ * specific key punishes someone who did nothing. Rationale and the rejected
+ * alternatives are in docs/adr/0005-rate-limiting-and-idempotency.md.
  */
+
+// express-rate-limit types this through its own AugmentedRequest rather than
+// augmenting Express, so declaring it here avoids a cast in the handler.
 declare module 'express-serve-static-core' {
   interface Request {
     rateLimit?: RateLimitInfo;
@@ -18,36 +20,8 @@ declare module 'express-serve-static-core' {
 }
 
 /**
- * The configured rate limiters.
- *
- * Keying strategy, which is the part that actually decides whether a limit is
- * fair or useless:
- *
- * - **Authenticated actions** key on the admin id. The account is the real
- *   subject, and it cannot be rotated.
- * - **Sign-in** is limited twice, on the account *and* on the network, because
- *   the two attack shapes evade opposite keys. A targeted brute force hits one
- *   account from many addresses, which only an account key catches. Credential
- *   stuffing hits many accounts from one source, which only a network key
- *   catches. OWASP calls for both.
- * - **Anonymous actions** have only the network, which is the weak case. IPv6
- *   is collapsed to the /64 so a client cannot simply pick another address from
- *   its own prefix, and the allowance is deliberately generous because carrier
- *   NAT puts many unrelated people behind one address. On Indian mobile
- *   networks that can be hundreds of users, so a tight per-IP limit would block
- *   a whole school to stop one abuser.
- *
- * Because the network key cannot be made trustworthy, the public form does not
- * rely on it alone. See `middleware/honeypot.ts` and the idempotency key on
- * submission.
- */
-
-/**
- * Translates a limiter trip into the standard error contract.
- *
- * Passed to `next` rather than thrown: the handler is invoked from inside the
- * limiter's own async work, where a throw would become an unhandled rejection
- * instead of reaching the error middleware.
+ * Passed to `next` rather than thrown: the handler runs inside the limiter's
+ * async work, where a throw becomes an unhandled rejection.
  */
 function rejectWithRateLimitError(
   req: Request,
@@ -64,38 +38,28 @@ function rejectWithRateLimitError(
   next(new RateLimitedError(retryAfterSeconds));
 }
 
-/**
- * Options every limiter shares, so none can accidentally differ.
- *
- * A fresh store per call, never a shared one: each limiter's window lives in
- * its store instance, so sharing would collapse every window to whichever
- * initialised last.
- */
+/** Shared options, with a fresh store per limiter. */
 function baseOptions(): Partial<Options> {
   return {
     store: createRateLimitStore(),
     standardHeaders: 'draft-8',
     legacyHeaders: false,
-    // Availability over enforcement for a counter. See logRateLimitProblem.
     passOnStoreError: true,
     handler: rejectWithRateLimitError,
-    // express-rate-limit logs to the console by default, which would bypass
-    // the redacting logger.
     logger: { error: logRateLimitProblem, warn: logRateLimitProblem },
   };
 }
 
-/** The network subject: an IPv4 address or an IPv6 /64. */
+/** IPv4 address, or IPv6 /64. */
 function networkSubject(req: Request): string {
   return normalizeClientAddress(req.ip ?? 'unknown');
 }
 
 /**
- * Public inquiry submission, keyed on the network.
- *
- * Generous on purpose. This limit exists to stop a script hammering the
- * endpoint, not to police how many questions one household may ask, and the
- * key is shared by everyone behind the same carrier address.
+ * Generous on purpose: this key is shared by everyone behind one carrier NAT
+ * address, so it stops scripted hammering rather than policing how many
+ * questions a household may ask. The honeypot is the control that does not
+ * depend on an address.
  */
 export const submitLimiter: RequestHandler = rateLimit({
   ...baseOptions(),
@@ -105,12 +69,9 @@ export const submitLimiter: RequestHandler = rateLimit({
 });
 
 /**
- * Sign-in, keyed on the account.
- *
- * `skipSuccessfulRequests` is what makes this a failed-attempt budget rather
- * than a sign-in budget: a user who mistypes once and then succeeds is not
- * penalised, while an attacker guessing wrongly is. The email is lowercased so
- * the key cannot be varied by changing capitalisation.
+ * Catches brute force against one account. `skipSuccessfulRequests` makes this
+ * a failed-attempt budget, so a user who mistypes once then succeeds is not
+ * penalised.
  */
 export const loginAccountLimiter: RequestHandler = rateLimit({
   ...baseOptions(),
@@ -118,9 +79,8 @@ export const loginAccountLimiter: RequestHandler = rateLimit({
   limit: config.RATE_LIMIT_LOGIN_MAX,
   skipSuccessfulRequests: true,
   keyGenerator: (req) => {
-    // Runs before body validation, so the body is untrusted here. A non-string
-    // or absent email falls back to the network subject rather than collapsing
-    // every malformed attempt into one shared bucket.
+    // Runs before validation, so the body is untrusted. A malformed email falls
+    // back to the network rather than collapsing every such attempt into one key.
     const email: unknown = (req.body as { email?: unknown } | undefined)?.email;
     const subject =
       typeof email === 'string' && email.length > 0 && email.length <= 254
@@ -131,11 +91,8 @@ export const loginAccountLimiter: RequestHandler = rateLimit({
 });
 
 /**
- * Sign-in, keyed on the network.
- *
- * Catches credential stuffing, which spreads a handful of attempts across many
- * accounts and so never trips a per-account limit. More generous than the
- * account limit because a school or office shares one address.
+ * Catches credential stuffing, which spreads few attempts across many accounts
+ * and so never trips the per-account limit.
  */
 export const loginNetworkLimiter: RequestHandler = rateLimit({
   ...baseOptions(),
@@ -145,7 +102,6 @@ export const loginNetworkLimiter: RequestHandler = rateLimit({
   keyGenerator: (req) => rateLimitKey('login-network', networkSubject(req)),
 });
 
-/** Token refresh, keyed on the network. Generous: a busy dashboard refreshes often. */
 export const refreshLimiter: RequestHandler = rateLimit({
   ...baseOptions(),
   windowMs: config.RATE_LIMIT_REFRESH_WINDOW_MS,
@@ -153,13 +109,7 @@ export const refreshLimiter: RequestHandler = rateLimit({
   keyGenerator: (req) => rateLimitKey('refresh', networkSubject(req)),
 });
 
-/**
- * CSV export, keyed on the authenticated admin.
- *
- * The account is the right subject here because the action removes personal
- * data from the application, and an account is accountable in a way an address
- * is not. Runs after authentication, so the principal is available.
- */
+/** Keyed on the account: an export removes personal data, and an account is accountable. */
 export const exportLimiter: RequestHandler = rateLimit({
   ...baseOptions(),
   windowMs: config.RATE_LIMIT_EXPORT_WINDOW_MS,

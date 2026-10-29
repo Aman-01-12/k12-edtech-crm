@@ -2,15 +2,11 @@ import { pool } from '../../db/pool.js';
 import type { Queryable } from '../../db/transaction.js';
 
 /**
- * Admin account persistence.
- *
- * Every statement names the columns it reads or writes. `password_hash` appears
- * in exactly two of them, the credential lookup and the password update, and in
- * no projection that any route can return. That is what makes it impossible for
- * a hash to reach a response by accident rather than merely unlikely.
+ * Every statement names its columns. `password_hash` appears only in the two
+ * credential lookups and the password update, never in a projection a route can
+ * return, which is what makes a leaked hash impossible rather than unlikely.
  */
 
-/** An admin as the dashboard and the session endpoint see them. */
 export interface AdminRecord extends Record<string, unknown> {
   id: string;
   email: string;
@@ -19,7 +15,6 @@ export interface AdminRecord extends Record<string, unknown> {
   created_at: Date;
 }
 
-/** An admin plus the hash, used only on the sign-in and password-change paths. */
 export interface AdminCredentialRecord extends Record<string, unknown> {
   id: string;
   email: string;
@@ -28,12 +23,8 @@ export interface AdminCredentialRecord extends Record<string, unknown> {
 }
 
 /**
- * Finds a live admin by email address for authentication.
- *
- * Matches on `lower(email)`, which is the expression the unique index is built
- * on, so the lookup uses the index and a difference in capitalisation cannot
- * cause a false mismatch. `deleted_at is null` is part of the predicate rather
- * than a later check, so a deactivated account simply does not exist here.
+ * Matches on `lower(email)`, the expression the unique index is built on, so the
+ * lookup uses the index and capitalisation cannot cause a false mismatch.
  */
 export async function findLiveAdminCredentialByEmail(
   email: string,
@@ -49,13 +40,7 @@ export async function findLiveAdminCredentialByEmail(
   return rows[0];
 }
 
-/**
- * Confirms an admin is still live, by id.
- *
- * Called on every authenticated request. That is what makes deactivation take
- * effect immediately rather than whenever the access token happens to expire:
- * the token may still verify, but the account behind it no longer resolves.
- */
+/** Called on every authenticated request; see `requireAdmin`. */
 export async function findLiveAdminById(id: string): Promise<AdminRecord | undefined> {
   const { rows } = await pool.query<AdminRecord>(
     `select id, email, full_name, last_login_at, created_at
@@ -68,12 +53,10 @@ export async function findLiveAdminById(id: string): Promise<AdminRecord | undef
   return rows[0];
 }
 
-/** Records a successful sign-in. */
 export async function markSignedIn(adminId: string): Promise<void> {
   await pool.query(`update admins set last_login_at = now() where id = $1`, [adminId]);
 }
 
-/** Lists live admin accounts, newest first. Never selects the hash. */
 export async function listLiveAdmins(): Promise<AdminRecord[]> {
   const { rows } = await pool.query<AdminRecord>(
     `select id, email, full_name, last_login_at, created_at
@@ -85,12 +68,9 @@ export async function listLiveAdmins(): Promise<AdminRecord[]> {
 }
 
 /**
- * Creates an admin account.
- *
- * @returns the created admin, or `undefined` when the email already belongs to
- *   a live account. Reported through the return type rather than an exception
- *   because a duplicate address is an expected outcome of a form submission,
- *   and the caller turns it into a 409.
+ * @returns the created admin, or undefined when the address already belongs to
+ *   a live account. A duplicate is an expected form outcome, so it is reported
+ *   through the return type and the caller turns it into a 409.
  */
 export async function insertAdmin(
   input: { email: string; passwordHash: string; fullName: string },
@@ -108,12 +88,7 @@ export async function insertAdmin(
   return rows[0];
 }
 
-/**
- * Soft-deletes an admin.
- *
- * @returns whether a live account was deactivated, so the caller can return 404
- *   rather than reporting success for an id that was never there.
- */
+/** @returns whether a live account was deactivated, so the caller can 404. */
 export async function softDeleteAdmin(id: string, client: Queryable = pool): Promise<boolean> {
   const { rowCount } = await client.query(
     `update admins set deleted_at = now() where id = $1 and deleted_at is null`,
@@ -122,7 +97,6 @@ export async function softDeleteAdmin(id: string, client: Queryable = pool): Pro
   return (rowCount ?? 0) > 0;
 }
 
-/** Replaces an admin's password hash. */
 export async function updatePasswordHash(
   adminId: string,
   passwordHash: string,
@@ -135,12 +109,7 @@ export async function updatePasswordHash(
   return (rowCount ?? 0) > 0;
 }
 
-/**
- * Finds a live admin's credential by id, for verifying a current password.
- *
- * Separate from `findLiveAdminById` so the hash is only ever selected by a
- * caller that genuinely needs to compare against it.
- */
+/** Separate from `findLiveAdminById` so the hash is only read when compared against. */
 export async function findLiveAdminCredentialById(
   id: string,
 ): Promise<AdminCredentialRecord | undefined> {
