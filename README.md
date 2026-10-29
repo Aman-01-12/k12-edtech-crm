@@ -14,10 +14,12 @@ No authentication provider or ORM is used.
 
 | | |
 |---|---|
-| **Application** | https://k12-edtech-crm.vercel.app |
-| **API health** | https://k12-edtech-crm.vercel.app/api/health |
+| **Application** | https://k12.crm.kiomeet.com |
+| **API health** | https://k12.crm.kiomeet.com/api/health |
 
-Sign in on the **Admin** link in the header.
+Both are also reachable on the platform-assigned hostname, https://k12-edtech-crm.vercel.app, if DNS for the custom domain is ever in flight.
+
+Sign in on the **Staff sign in** link in the header.
 
 | | |
 |---|---|
@@ -335,7 +337,11 @@ Full taxonomy: [ADR 0008](docs/adr/0008-error-contract.md).
 ## Authentication, demonstrated with curl
 
 The tokens live in `HttpOnly` cookies, so `curl` needs a cookie jar.
-Replace `$BASE` with the live API origin or `http://localhost:4000`.
+Every status and response body below is what the live deployment returned when this sequence was last run against it.
+
+```sh
+BASE=https://k12.crm.kiomeet.com     # or http://localhost:4000 when running locally
+```
 
 **1. Submit an inquiry with no credentials at all. This is public.**
 
@@ -411,7 +417,7 @@ curl -sS -b tampered.txt "$BASE/api/v1/inquiries"
 ```
 
 ```
-401  {"error":"Your session is no longer valid.","code":"TOKEN_INVALID","requestId":"..."}
+401  {"error":"Your session is not valid. Please sign in again.","code":"TOKEN_INVALID","requestId":"..."}
 ```
 
 The verifier pins the algorithm to `HS256` and requires the issuer and audience claims, so a token signed with `alg: none`, re-signed as `HS512`, or minted by another system with the same secret is rejected as well.
@@ -456,14 +462,25 @@ Signing in again is the recovery.
 The event is written to the append-only `security_events` table.
 
 Revoking the family only stops renewal, so detection also stamps a session cutoff on the account, which is what makes the third call above fail rather than keep working until the access token expires.
-The cutoff compares against the token's `iat`, which JWT defines in whole seconds, so an access token minted in the same second as the rotation survives; the window is under a second and closing it would need a token claim finer than the standard provides.
+The cutoff is compared against the token's `iat`, and JWT defines that claim in whole seconds, so it is stamped a second ahead: without that, a token minted in the same second as the detection compares as not-before the cutoff and survives, which in a back-to-back sequence like the one above is every time.
+The cost is that a fresh sign-in landing inside that one second is refused and has to be repeated, which is the right way round when the alternative is leaving a stolen token working.
 
 **8. Sign out.**
 
+Step 7 destroyed the session on purpose, so sign in again first, and read the CSRF cookie from the new jar rather than reusing the value from step 6.
+
 ```sh
-curl -sS -b jar.txt -X POST "$BASE/api/v1/auth/logout" -H "X-CSRF-Token: $CSRF"   # 204
-curl -sS -b jar.txt "$BASE/api/v1/inquiries"                                      # 401
+curl -sS -c jar.txt -X POST "$BASE/api/v1/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo.admin@example.com","password":"<password>"}'
+
+CSRF=$(awk '/k12_csrf/ {print $7}' jar.txt)
+curl -sS -b jar.txt -c jar.txt -X POST "$BASE/api/v1/auth/logout" -H "X-CSRF-Token: $CSRF"   # 204
+curl -sS -b jar.txt "$BASE/api/v1/inquiries"                                                 # 401
 ```
+
+`-c` on the logout call matters: sign-out works by clearing the three cookies, and without it `curl` keeps the old jar and the follow-up read still carries a live token.
+A browser has no such choice.
 
 ---
 
