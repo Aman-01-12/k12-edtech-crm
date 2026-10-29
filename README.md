@@ -570,7 +570,24 @@ Two Vercel projects from this one repository.
 
 `hnd1` (Tokyo) is chosen to sit beside the Supabase project in `ap-northeast-1`, so the database round-trip does not cross an ocean.
 
-The API deployment needs `DATABASE_URL`, `JWT_SECRET`, `NODE_ENV=production` and `CORS_ALLOWED_ORIGINS`.
+The API deployment needs four variables, and one that is easy to miss:
+
+| | |
+|---|---|
+| `DATABASE_URL` | pooler host, port 6543, password percent-encoded |
+| `JWT_SECRET` | 32 bytes minimum |
+| `NODE_ENV` | `production`, which is what turns on the `Secure` cookie flag |
+| `CORS_ALLOWED_ORIGINS` | the frontend origin |
+| `DATABASE_CA_CERT` | **required for Supabase** |
+
+The last one catches people out.
+Supabase signs its Postgres certificate with a self-signed `Supabase Root 2021 CA`, so a verified TLS connection fails with `SELF_SIGNED_CERT_IN_CHAIN` until the CA is supplied.
+Download it from the dashboard under Database Settings, SSL Configuration.
+
+The common workaround is `rejectUnauthorized: false`, which keeps the connection encrypted while silently giving up on checking *which server answered*.
+That defends against a passive listener and not against an active one, so this codebase does not do it; see [ADR 0011](docs/adr/0011-database-tls-verification.md).
+The supplied CA is added to Node's bundled roots rather than replacing them, so setting the variable cannot break a provider that does use a publicly trusted certificate.
+
 `.github/workflows/ci.yml` runs the full gate, an `npm audit`, and a schema application against a throwaway PostgreSQL service on every push.
 
 ---

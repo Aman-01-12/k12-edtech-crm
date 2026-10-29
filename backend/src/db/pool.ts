@@ -1,3 +1,4 @@
+import { rootCertificates } from 'node:tls';
 import pg from 'pg';
 import { config } from '../config/env.js';
 import { logger } from '../lib/logger.js';
@@ -28,8 +29,11 @@ function resolveSslConfig(): pg.PoolConfig['ssl'] {
     return false;
   }
 
+  // Added to the public roots rather than replacing them, because Node's `ca`
+  // option is a replacement: supplying a private CA alone would reject a
+  // provider that happens to use a publicly trusted certificate.
   if (config.DATABASE_CA_CERT !== undefined) {
-    return { ca: config.DATABASE_CA_CERT, rejectUnauthorized: true };
+    return { ca: [config.DATABASE_CA_CERT, ...rootCertificates], rejectUnauthorized: true };
   }
 
   if (config.DATABASE_SSL_NO_VERIFY) {

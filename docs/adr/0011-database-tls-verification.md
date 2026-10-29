@@ -21,7 +21,7 @@ It is there because Supabase signs its Postgres certificate with its own CA, whi
 Secure by default, with an explicit and visible way out.
 
 1. A local database gets no TLS at all. There is nothing to authenticate across a loopback interface.
-2. If `DATABASE_CA_CERT` is set, verify against it with `rejectUnauthorized: true`. This is the correct configuration for Supabase; the certificate is downloadable from the project's database settings.
+2. If `DATABASE_CA_CERT` is set, verify against it with `rejectUnauthorized: true`. This is the correct configuration for Supabase; the certificate is downloadable from the project's database settings. The supplied CA is **added** to Node's bundled roots rather than replacing them, because Node's `ca` option is a replacement: a private CA on its own would reject a provider whose certificate happens to chain to a public one, so setting the variable would turn a working connection into a broken one.
 3. Otherwise verify against the system trust store. If the provider's certificate does not chain to a public CA this fails loudly at connect time, which is the right outcome.
 4. `DATABASE_SSL_NO_VERIFY=true` skips verification. It must be set deliberately, and it logs a warning naming the host on every startup.
 
