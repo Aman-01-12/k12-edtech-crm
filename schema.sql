@@ -196,6 +196,10 @@ CREATE TABLE IF NOT EXISTS inquiries (
   status_updated_at TIMESTAMPTZ,
   status_updated_by UUID REFERENCES admins (id) ON DELETE SET NULL,
 
+  -- Owner, so a team can divide the queue. SET NULL for the same reason: an
+  -- enquiry outlives whichever account happened to own it.
+  assigned_to_admin_id UUID REFERENCES admins (id) ON DELETE SET NULL,
+
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -204,6 +208,48 @@ CREATE TABLE IF NOT EXISTS inquiries (
   CONSTRAINT inquiries_status_change_is_complete
   CHECK ((status_updated_at IS NULL) = (status_updated_by IS NULL))
 );
+
+-- Added after this table first shipped, so it needs an explicit ALTER to reach
+-- a database that already has it; CREATE TABLE IF NOT EXISTS is a no-op there.
+ALTER TABLE inquiries ADD COLUMN IF NOT EXISTS assigned_to_admin_id UUID REFERENCES admins (id) ON DELETE SET NULL;
+
+-- "My queue", the one view a staff member returns to all day. Partial: an
+-- unassigned enquiry is found through the default listing, not through this.
+CREATE INDEX IF NOT EXISTS inquiries_assigned_created_at_idx
+  ON inquiries (assigned_to_admin_id, created_at DESC, id DESC)
+  WHERE assigned_to_admin_id IS NOT NULL;
+
+
+-- -----------------------------------------------------------------------------
+-- inquiry_notes
+--
+-- Internal staff commentary on an enquiry: the "what happened when I rang them"
+-- that every CRM has and that the enquiry's own columns cannot hold.
+--
+-- `author_name` is a snapshot rather than a join, so a note still says who
+-- wrote it after that account is deactivated and `admin_id` goes NULL.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS inquiry_notes (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  inquiry_id UUID NOT NULL REFERENCES inquiries (id) ON DELETE CASCADE,
+
+  admin_id   UUID REFERENCES admins (id) ON DELETE SET NULL,
+  author_name TEXT NOT NULL
+              CONSTRAINT inquiry_notes_author_name_length
+              CHECK (char_length(author_name) BETWEEN 1 AND 120),
+
+  body       TEXT NOT NULL
+             CONSTRAINT inquiry_notes_body_length
+             CHECK (char_length(body) BETWEEN 1 AND 2000),
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- The only query: this enquiry's notes, newest first.
+CREATE INDEX IF NOT EXISTS inquiry_notes_inquiry_created_at_idx
+  ON inquiry_notes (inquiry_id, created_at DESC);
 
 DROP TRIGGER IF EXISTS inquiries_set_updated_at ON inquiries;
 CREATE TRIGGER inquiries_set_updated_at
@@ -427,8 +473,19 @@ ALTER TABLE security_events ADD CONSTRAINT security_events_type_valid
     'inquiry_exported',
     'password_changed',
     'admin_account_changed',
-    'password_reset_completed'
+    'password_reset_completed',
+    'inquiry_assigned',
+    'inquiry_note_added',
+    'inquiry_note_deleted'
   ));
+
+-- The enquiry timeline reads status changes and assignments straight out of
+-- this table rather than duplicating them into a second history table. Partial
+-- and expression-based, because that timeline is the only query that filters on
+-- a key inside `detail`.
+CREATE INDEX IF NOT EXISTS security_events_inquiry_idx
+  ON security_events ((detail ->> 'inquiryId'), created_at DESC)
+  WHERE detail ? 'inquiryId';
 
 CREATE INDEX IF NOT EXISTS security_events_type_created_at_idx
   ON security_events (event_type, created_at DESC);
@@ -488,6 +545,7 @@ CREATE INDEX IF NOT EXISTS rate_limit_hits_window_start_idx
 -- -----------------------------------------------------------------------------
 
 ALTER TABLE inquiries             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inquiry_notes         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admins                ENABLE ROW LEVEL SECURITY;
 ALTER TABLE refresh_tokens        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE password_reset_tokens ENABLE ROW LEVEL SECURITY;
@@ -502,7 +560,7 @@ BEGIN
   LOOP
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = provider_role) THEN
       EXECUTE format(
-        'REVOKE ALL PRIVILEGES ON TABLE inquiries, admins, refresh_tokens, password_reset_tokens, security_events, rate_limit_hits FROM %I',
+        'REVOKE ALL PRIVILEGES ON TABLE inquiries, inquiry_notes, admins, refresh_tokens, password_reset_tokens, security_events, rate_limit_hits FROM %I',
         provider_role
       );
     END IF;

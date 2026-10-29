@@ -18,7 +18,10 @@ export type SecurityEventType =
   | 'inquiry_exported'
   | 'password_changed'
   | 'admin_account_changed'
-  | 'password_reset_completed';
+  | 'password_reset_completed'
+  | 'inquiry_assigned'
+  | 'inquiry_note_added'
+  | 'inquiry_note_deleted';
 
 export interface SecurityEventInput {
   eventType: SecurityEventType;

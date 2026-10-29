@@ -63,10 +63,15 @@ Collects user type (Parent, Student, School), inquiry category (Scholarship, Con
 Behind sign-in.
 
 - **List** every inquiry, newest first, keyset-paginated.
-- **Filter** by category and by user type.
+- **Open a record** in a slide-over panel: the full message, every submitted field, and the actions below. The list stays mounted behind it, so working a queue does not mean rebuilding the filters for every enquiry.
+- **Filter** by status, category, user type and owner, including "Mine" and "Unassigned".
 - **Search** by name, email or phone. Phone search accepts any formatting.
-- **Change status** along `New -> In Progress -> Resolved -> Closed`, shown as a rail rather than a dropdown because the status is a genuine sequence.
-- **Summary counts** per status, per category and per user type, for the current filter.
+- **Change status** along `New -> In Progress -> Resolved -> Closed`, shown as a rail rather than a dropdown because the status is a genuine sequence. Works from the row or from inside the panel.
+- **Assign an owner**, or hand it back to nobody.
+- **Add internal notes**, visible only to staff, each keeping its author's name even after that account is deactivated. An author can delete their own notes; nobody else can.
+- **See the history**: every status change, assignment and note action, with who did it and when, read from the append-only audit log rather than a second store that could disagree with it.
+- **Call or email** the submitter directly from the record.
+- **Summary counts** per status, which double as the status filter: the number you want to act on is the control that filters to it.
 - **Export to CSV**, respecting the current filter, with spreadsheet formula injection neutralised.
 - **Manage admins**: list, invite (the server generates the password and shows it once), deactivate. There is no public sign-up.
 - **Change your own password**, which requires the current one and reissues the session.
@@ -286,10 +291,14 @@ Base path `/api/v1`. All bodies are JSON. All responses carry `X-Request-Id`.
 
 | Method | Path | |
 |---|---|---|
-| `GET` | `/api/v1/inquiries` | keyset-paginated list; `category`, `userType`, `search`, `limit`, `cursor` |
-| `GET` | `/api/v1/inquiries/summary` | counts by status, category and user type for the same filter |
+| `GET` | `/api/v1/inquiries` | keyset-paginated list; `category`, `userType`, `status`, `assignedTo`, `search`, `limit`, `cursor` |
+| `GET` | `/api/v1/inquiries/summary` | counts by status for the same filter |
 | `GET` | `/api/v1/inquiries/export` | CSV of the current filter |
+| `GET` | `/api/v1/inquiries/:id` | one record with its notes and history, in a single round trip |
 | `PATCH` | `/api/v1/inquiries/:id/status` | change one inquiry's status |
+| `PATCH` | `/api/v1/inquiries/:id/assignment` | set or clear the owner |
+| `POST` | `/api/v1/inquiries/:id/notes` | add an internal note |
+| `DELETE` | `/api/v1/inquiries/:id/notes/:noteId` | delete a note, authors only |
 | `GET` | `/api/v1/admins` | list active admins |
 | `POST` | `/api/v1/admins` | create an admin; returns the generated password once |
 | `DELETE` | `/api/v1/admins/:id` | deactivate an admin and revoke its sessions |
@@ -461,6 +470,8 @@ It is idempotent and has been applied to both PostgreSQL 15 and PostgreSQL 17; t
 | Table | |
 |---|---|
 | `admins` | accounts; bcrypt hash, soft-deleted via `deleted_at` because the audit log and the inquiry status trail reference them |
+| `inquiry_notes` | internal staff notes, with the author's name snapshotted so attribution survives deactivation |
+| `password_reset_tokens` | SHA-256 digests, single-use, time-limited |
 | `inquiries` | submissions, with status and an audit of who changed it when |
 | `refresh_tokens` | SHA-256 digests, `family_id`, `predecessor_id` chain, `revoked_at` |
 | `security_events` | append-only audit log |
@@ -620,6 +631,7 @@ The point is not to prove the choice was right, but to show it was a choice rath
 | [0011](docs/adr/0011-database-tls-verification.md) | Database TLS verified by default |
 | [0012](docs/adr/0012-vercel-function-bundling.md) | The deployed API function is a committed esbuild bundle |
 | [0013](docs/adr/0013-password-reset-by-email.md) | Self-service password reset by email via Resend |
+| [0014](docs/adr/0014-record-panel-and-flat-surfaces.md) | A record panel for enquiry actions, flat surfaces instead of nested cards |
 
 ---
 

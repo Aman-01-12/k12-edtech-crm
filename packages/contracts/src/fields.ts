@@ -31,6 +31,17 @@ export const PASSWORD_MAX_BYTES = 72;
 export const PASSWORD_MIN_LENGTH = 12;
 
 /**
+ * The limit is genuinely bytes, not characters, because that is what bcrypt
+ * measures. Saying so to someone choosing a password is useless, and saying
+ * "72 characters" would be a lie for anyone typing Hindi or an emoji, where one
+ * character costs three or four. The message gives the number that is right for
+ * plain English and names the exception instead of hiding it.
+ */
+const TOO_LONG_MESSAGE =
+  `Password must be ${PASSWORD_MAX_BYTES} characters or fewer. ` +
+  'Emoji and accented or non-English letters each count as several.';
+
+/**
  * Order matters here: normalization runs before the control-character check, so
  * whitespace controls such as a pasted line break are collapsed to a space
  * rather than rejected, while controls normalization cannot remove, such as a
@@ -100,19 +111,13 @@ export const messageSchema = z
 export const loginPasswordSchema = z
   .string()
   .min(1, 'Enter your password.')
-  .refine(
-    (value) => utf8ByteLength(value) <= PASSWORD_MAX_BYTES,
-    `Password must be ${PASSWORD_MAX_BYTES} bytes or fewer.`,
-  );
+  .refine((value) => utf8ByteLength(value) <= PASSWORD_MAX_BYTES, TOO_LONG_MESSAGE);
 
 /** The password field as accepted when provisioning an admin account. */
 export const newPasswordSchema = z
   .string()
   .min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`)
-  .refine(
-    (value) => utf8ByteLength(value) <= PASSWORD_MAX_BYTES,
-    `Password must be ${PASSWORD_MAX_BYTES} bytes or fewer.`,
-  )
+  .refine((value) => utf8ByteLength(value) <= PASSWORD_MAX_BYTES, TOO_LONG_MESSAGE)
   .refine((value) => /[a-z]/.test(value), 'Password must contain a lowercase letter.')
   .refine((value) => /[A-Z]/.test(value), 'Password must contain an uppercase letter.')
   .refine((value) => /\d/.test(value), 'Password must contain a digit.');

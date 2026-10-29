@@ -91,8 +91,24 @@ export const controlClass = CONTROL_CLASS;
 const SELECT_CHEVRON =
   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%234A6673' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")";
 
-export const selectClass =
-  `${CONTROL_CLASS} appearance-none bg-no-repeat pr-10 ` +
-  'bg-[length:12px_8px] bg-[position:right_1rem_center] cursor-pointer';
+/** The chevron and reset, without any width, so each caller sets its own. */
+const SELECT_CHROME =
+  'appearance-none bg-no-repeat pr-9 bg-[length:12px_8px] ' +
+  'bg-[position:right_0.75rem_center] cursor-pointer';
+
+export const selectClass = `${CONTROL_CLASS} ${SELECT_CHROME}`;
+
+/**
+ * The toolbar variant: intrinsic width, so several sit on one row.
+ *
+ * Deliberately not `selectClass` plus `w-auto`. Both utilities carry the same
+ * CSS specificity, so which one wins depends on their order in the generated
+ * stylesheet rather than their order in the class attribute, and `w-full`
+ * silently won.
+ */
+export const selectCompactClass =
+  'rounded-md border border-edge bg-surface py-1.5 pl-3 text-sm text-ink ' +
+  'transition-colors hover:border-ink-faint ' +
+  SELECT_CHROME;
 
 export const selectStyle = { backgroundImage: SELECT_CHEVRON };

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { inquiryCategorySchema, inquiryStatusSchema, userTypeSchema } from './enums.js';
 import { emailSchema, fullNameSchema, messageSchema, phoneSchema } from './fields.js';
+import { containsControlCharacters, TEXT_BLOCK_ALLOWED_CONTROLS } from './text.js';
 
 /**
  * The public submission body.
@@ -53,9 +54,85 @@ export const inquirySchema = z.object({
   message: z.string(),
   createdAt: z.iso.datetime(),
   statusUpdatedAt: z.iso.datetime().nullable(),
+  /** Owner, or null when nobody has picked it up. */
+  assignedToAdminId: z.uuid().nullable(),
+  assignedToName: z.string().nullable(),
 });
 
 export type Inquiry = z.output<typeof inquirySchema>;
+
+/**
+ * Internal staff commentary on one enquiry.
+ *
+ * `authorName` is stored alongside the note rather than joined, so a note still
+ * says who wrote it after that account is deactivated.
+ */
+export const inquiryNoteSchema = z.object({
+  id: z.uuid(),
+  body: z.string(),
+  authorName: z.string(),
+  authorAdminId: z.uuid().nullable(),
+  createdAt: z.iso.datetime(),
+  /** Whether the caller wrote this note, and may therefore delete it. */
+  deletableByViewer: z.boolean(),
+});
+
+export type InquiryNote = z.output<typeof inquiryNoteSchema>;
+
+export const NOTE_MIN_LENGTH = 1;
+export const NOTE_MAX_LENGTH = 2000;
+
+export const createNoteSchema = z.strictObject({
+  body: z
+    .string()
+    .trim()
+    .pipe(
+      z
+        .string()
+        .min(NOTE_MIN_LENGTH, 'Write something before saving.')
+        .max(NOTE_MAX_LENGTH, `A note must be ${NOTE_MAX_LENGTH} characters or fewer.`)
+        .refine(
+          (value) => !containsControlCharacters(value, TEXT_BLOCK_ALLOWED_CONTROLS),
+          'The note contains unsupported characters.',
+        ),
+    ),
+});
+
+export type CreateNote = z.output<typeof createNoteSchema>;
+
+/**
+ * Reassigning an enquiry. `null` unassigns it, which is a real action rather
+ * than an absent value, so the field is required and explicitly nullable.
+ */
+export const assignInquirySchema = z.strictObject({
+  assignedToAdminId: z.uuid().nullable(),
+});
+
+export type AssignInquiry = z.output<typeof assignInquirySchema>;
+
+/**
+ * One entry in an enquiry's history, read from the append-only security log
+ * rather than a second history table.
+ */
+export const inquiryTimelineEntrySchema = z.object({
+  id: z.uuid(),
+  kind: z.enum(['status_changed', 'assigned', 'note_added', 'note_deleted']),
+  actorName: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+  /** Human-readable summary, assembled server-side from the event detail. */
+  summary: z.string(),
+});
+
+export type InquiryTimelineEntry = z.output<typeof inquiryTimelineEntrySchema>;
+
+/** Everything the detail panel needs, in one round trip. */
+export const inquiryDetailSchema = z.object({
+  inquiry: inquirySchema,
+  notes: z.array(inquiryNoteSchema),
+  timeline: z.array(inquiryTimelineEntrySchema),
+});
+
+export type InquiryDetail = z.output<typeof inquiryDetailSchema>;
 
 /**
  * The status-change body.
@@ -72,4 +149,9 @@ export type UpdateInquiryStatus = z.output<typeof updateInquiryStatusSchema>;
 /** The id path parameter, validated so a malformed id never reaches a query. */
 export const inquiryIdParamSchema = z.strictObject({
   id: z.uuid('Inquiry id must be a UUID.'),
+});
+
+export const inquiryNoteParamsSchema = z.strictObject({
+  id: z.uuid('Inquiry id must be a UUID.'),
+  noteId: z.uuid('Note id must be a UUID.'),
 });

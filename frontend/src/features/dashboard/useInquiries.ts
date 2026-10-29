@@ -15,6 +15,9 @@ import { api } from '../../lib/api-client';
 export interface InquiryFilters {
   category?: InquiryCategory | undefined;
   userType?: UserType | undefined;
+  status?: InquiryStatus | undefined;
+  /** An admin id, or the literal `unassigned`. */
+  assignedTo?: string | undefined;
   search?: string | undefined;
 }
 
@@ -30,6 +33,8 @@ function toQueryString(filters: InquiryFilters, cursor: string | undefined): str
   const params = new URLSearchParams();
   if (filters.category !== undefined) params.set('category', filters.category);
   if (filters.userType !== undefined) params.set('userType', filters.userType);
+  if (filters.status !== undefined) params.set('status', filters.status);
+  if (filters.assignedTo !== undefined) params.set('assignedTo', filters.assignedTo);
   if (filters.search !== undefined && filters.search.length >= SEARCH_MIN_LENGTH) {
     params.set('search', filters.search);
   }
@@ -55,6 +60,8 @@ export function useInquiryDashboard() {
 
   const [category, setCategory] = useState<InquiryCategory | undefined>();
   const [userType, setUserType] = useState<UserType | undefined>();
+  const [status, setStatus] = useState<InquiryStatus | undefined>();
+  const [assignedTo, setAssignedTo] = useState<string | undefined>();
   const [searchInput, setSearchInput] = useState('');
   const [cursor, setCursor] = useState<string | undefined>();
   const [pageStack, setPageStack] = useState<(string | undefined)[]>([]);
@@ -65,16 +72,18 @@ export function useInquiryDashboard() {
     () => ({
       category,
       userType,
+      status,
+      assignedTo,
       search: search.length >= SEARCH_MIN_LENGTH ? search : undefined,
     }),
-    [category, userType, search],
+    [category, userType, status, assignedTo, search],
   );
 
   // Any filter change invalidates the cursor; see the note above.
   useEffect(() => {
     setCursor(undefined);
     setPageStack([]);
-  }, [category, userType, search]);
+  }, [category, userType, status, assignedTo, search]);
 
   const queryString = toQueryString(filters, cursor);
 
@@ -122,8 +131,13 @@ export function useInquiryDashboard() {
       }
     },
 
-    onSettled: () => {
+    onSettled: (_data, _error, variables) => {
       void queryClient.invalidateQueries({ queryKey: ['inquiries-summary'] });
+      // The detail panel is a separate cache entry. Without this, advancing the
+      // rail from inside the panel updates the server and the row behind it
+      // while the panel itself keeps showing the old status and a stale
+      // history.
+      void queryClient.invalidateQueries({ queryKey: ['inquiry', variables.id] });
     },
   });
 
@@ -147,16 +161,24 @@ export function useInquiryDashboard() {
   const clearFilters = useCallback(() => {
     setCategory(undefined);
     setUserType(undefined);
+    setStatus(undefined);
+    setAssignedTo(undefined);
     setSearchInput('');
   }, []);
 
   const hasActiveFilters =
-    category !== undefined || userType !== undefined || searchInput.trim().length > 0;
+    category !== undefined ||
+    userType !== undefined ||
+    status !== undefined ||
+    assignedTo !== undefined ||
+    searchInput.trim().length > 0;
 
   return {
-    filters: { category, userType, searchInput },
+    filters: { category, userType, status, assignedTo, searchInput },
     setCategory,
     setUserType,
+    setStatus,
+    setAssignedTo,
     setSearchInput,
     clearFilters,
     hasActiveFilters,

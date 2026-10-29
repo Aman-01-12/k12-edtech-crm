@@ -3,18 +3,25 @@ import {
   INQUIRY_CATEGORY_LABELS,
   INQUIRY_STATUS_LABELS,
   USER_TYPE_LABELS,
+  assignInquirySchema,
   createInquirySchema,
+  createNoteSchema,
   HONEYPOT_FIELD,
   inquiryIdParamSchema,
+  inquiryNoteParamsSchema,
   listInquiriesQuerySchema,
   updateInquiryStatusSchema,
+  type AssignInquiry,
   type CreateInquiry,
+  type CreateNote,
   type ListInquiriesQuery,
   type UpdateInquiryStatus,
 } from '@k12/contracts';
 import { z } from 'zod';
 import { config } from '../../config/env.js';
 import { NotFoundError, TokenInvalidError, ValidationError } from '../../errors/app-error.js';
+import { findLiveAdminById } from '../auth/admin.repository.js';
+import type { AuthenticatedAdminPrincipal } from '../../middleware/require-admin.js';
 import { encodeCsvRow } from '../../lib/csv.js';
 import { requireCsrfToken } from '../../middleware/csrf.js';
 import { honeypot } from '../../middleware/honeypot.js';
@@ -23,14 +30,32 @@ import { requireAdmin } from '../../middleware/require-admin.js';
 import { validateBody, validateParams, validateQuery } from '../../middleware/validate.js';
 import { recordSecurityEvent } from '../auth/security-event.repository.js';
 import {
+  assignInquiry,
   createInquiry,
+  deleteInquiryNote,
+  findInquiryById,
+  insertInquiryNote,
   listInquiries,
   listInquiriesForExport,
+  listInquiryNotes,
+  listInquiryTimeline,
   summariseInquiries,
   updateInquiryStatus,
 } from './inquiries.repository.js';
 
 export const inquiriesRouter = Router();
+
+/**
+ * `requireAdmin` guarantees this, but it cannot say so in the type. Narrowing
+ * here once keeps the same three-line guard out of every protected handler.
+ */
+function requireAdminPrincipal(req: { admin?: AuthenticatedAdminPrincipal }) {
+  const admin = req.admin;
+  if (admin === undefined) {
+    throw new TokenInvalidError();
+  }
+  return admin;
+}
 
 /** Optional client key making a retried submission idempotent. */
 const idempotencyKeySchema = z.uuid();
@@ -150,6 +175,29 @@ inquiriesRouter.get(
   },
 );
 
+/** The detail panel's one round trip: the enquiry, its notes and its history. */
+inquiriesRouter.get(
+  '/:id',
+  requireAdmin,
+  validateParams(inquiryIdParamSchema),
+  async (req, res) => {
+    const admin = requireAdminPrincipal(req);
+    const { id } = req.validatedParams as { id: string };
+
+    const inquiry = await findInquiryById(id);
+    if (inquiry === undefined) {
+      throw new NotFoundError('inquiry');
+    }
+
+    const [notes, timeline] = await Promise.all([
+      listInquiryNotes(id, admin.adminId),
+      listInquiryTimeline(id),
+    ]);
+
+    res.status(200).json({ inquiry, notes, timeline });
+  },
+);
+
 inquiriesRouter.patch(
   '/:id/status',
   requireAdmin,
@@ -157,11 +205,7 @@ inquiriesRouter.patch(
   validateParams(inquiryIdParamSchema),
   validateBody(updateInquiryStatusSchema),
   async (req, res) => {
-    const admin = req.admin;
-    if (admin === undefined) {
-      throw new TokenInvalidError();
-    }
-
+    const admin = requireAdminPrincipal(req);
     const { id } = req.validatedParams as { id: string };
     const { status } = req.body as UpdateInquiryStatus;
 
@@ -176,11 +220,136 @@ inquiriesRouter.patch(
         adminId: admin.adminId,
         ipAddress: req.ip,
         requestId: req.requestId,
-        detail: { inquiryId: id, status },
+        detail: { inquiryId: id, status, previousStatus: updated.previousStatus },
       },
       (error) => req.log.error({ err: error }, 'Failed to record status change'),
     );
 
+    res.status(200).json({ inquiry: updated.inquiry });
+  },
+);
+
+/** Set or clear the owner. A null id unassigns. */
+inquiriesRouter.patch(
+  '/:id/assignment',
+  requireAdmin,
+  requireCsrfToken,
+  validateParams(inquiryIdParamSchema),
+  validateBody(assignInquirySchema),
+  async (req, res) => {
+    const admin = requireAdminPrincipal(req);
+    const { id } = req.validatedParams as { id: string };
+    const { assignedToAdminId } = req.body as AssignInquiry;
+
+    // Checked before the write so assigning to a deactivated or nonexistent
+    // account is a 400 rather than a foreign-key error surfacing as a 500.
+    if (assignedToAdminId !== null) {
+      const assignee = await findLiveAdminById(assignedToAdminId);
+      if (assignee === undefined) {
+        throw new ValidationError({
+          assignedToAdminId: ['That admin account does not exist or is no longer active.'],
+        });
+      }
+    }
+
+    const updated = await assignInquiry(id, assignedToAdminId);
+    if (updated === undefined) {
+      throw new NotFoundError('inquiry');
+    }
+
+    await recordSecurityEvent(
+      {
+        eventType: 'inquiry_assigned',
+        adminId: admin.adminId,
+        ipAddress: req.ip,
+        requestId: req.requestId,
+        detail: {
+          inquiryId: id,
+          assignedToAdminId,
+          assignedToName: updated.assignedToName,
+        },
+      },
+      (error) => req.log.error({ err: error }, 'Failed to record assignment'),
+    );
+
     res.status(200).json({ inquiry: updated });
+  },
+);
+
+inquiriesRouter.post(
+  '/:id/notes',
+  requireAdmin,
+  requireCsrfToken,
+  validateParams(inquiryIdParamSchema),
+  validateBody(createNoteSchema),
+  async (req, res) => {
+    const admin = requireAdminPrincipal(req);
+    const { id } = req.validatedParams as { id: string };
+    const { body } = req.body as CreateNote;
+
+    // Confirms the enquiry exists before writing, so a note cannot be attached
+    // to an id that was never there.
+    const inquiry = await findInquiryById(id);
+    if (inquiry === undefined) {
+      throw new NotFoundError('inquiry');
+    }
+
+    const note = await insertInquiryNote({
+      inquiryId: id,
+      adminId: admin.adminId,
+      authorName: admin.fullName,
+      body,
+    });
+
+    await recordSecurityEvent(
+      {
+        eventType: 'inquiry_note_added',
+        adminId: admin.adminId,
+        ipAddress: req.ip,
+        requestId: req.requestId,
+        // The note's own text is deliberately absent: the security log is not
+        // where third-party personal data belongs.
+        detail: { inquiryId: id, noteId: note.id },
+      },
+      (error) => req.log.error({ err: error }, 'Failed to record note'),
+    );
+
+    res.status(201).json({ note });
+  },
+);
+
+/**
+ * Deletes a note. Authors only.
+ *
+ * The ownership check is a predicate in the DELETE statement, so there is no
+ * gap between checking and writing, and "not yours" is answered identically to
+ * "no such note" so the response cannot confirm someone else's note exists.
+ */
+inquiriesRouter.delete(
+  '/:id/notes/:noteId',
+  requireAdmin,
+  requireCsrfToken,
+  validateParams(inquiryNoteParamsSchema),
+  async (req, res) => {
+    const admin = requireAdminPrincipal(req);
+    const { id, noteId } = req.validatedParams as { id: string; noteId: string };
+
+    const deleted = await deleteInquiryNote({ noteId, inquiryId: id, adminId: admin.adminId });
+    if (!deleted) {
+      throw new NotFoundError('note');
+    }
+
+    await recordSecurityEvent(
+      {
+        eventType: 'inquiry_note_deleted',
+        adminId: admin.adminId,
+        ipAddress: req.ip,
+        requestId: req.requestId,
+        detail: { inquiryId: id, noteId },
+      },
+      (error) => req.log.error({ err: error }, 'Failed to record note deletion'),
+    );
+
+    res.status(204).send();
   },
 );

@@ -242,6 +242,7 @@ var MESSAGE_MIN_LENGTH = 10;
 var MESSAGE_MAX_LENGTH = 2e3;
 var PASSWORD_MAX_BYTES = 72;
 var PASSWORD_MIN_LENGTH = 12;
+var TOO_LONG_MESSAGE = `Password must be ${PASSWORD_MAX_BYTES} characters or fewer. Emoji and accented or non-English letters each count as several.`;
 var fullNameSchema = z3.string().trim().transform(collapseWhitespace).pipe(
   z3.string().min(FULL_NAME_MIN_LENGTH, `Name must be at least ${FULL_NAME_MIN_LENGTH} characters.`).max(FULL_NAME_MAX_LENGTH, `Name must be ${FULL_NAME_MAX_LENGTH} characters or fewer.`).refine(
     (value) => !containsControlCharacters(value),
@@ -268,14 +269,8 @@ var messageSchema = z3.string().trim().pipe(
     "Message contains unsupported characters."
   )
 );
-var loginPasswordSchema = z3.string().min(1, "Enter your password.").refine(
-  (value) => utf8ByteLength(value) <= PASSWORD_MAX_BYTES,
-  `Password must be ${PASSWORD_MAX_BYTES} bytes or fewer.`
-);
-var newPasswordSchema = z3.string().min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`).refine(
-  (value) => utf8ByteLength(value) <= PASSWORD_MAX_BYTES,
-  `Password must be ${PASSWORD_MAX_BYTES} bytes or fewer.`
-).refine((value) => /[a-z]/.test(value), "Password must contain a lowercase letter.").refine((value) => /[A-Z]/.test(value), "Password must contain an uppercase letter.").refine((value) => /\d/.test(value), "Password must contain a digit.");
+var loginPasswordSchema = z3.string().min(1, "Enter your password.").refine((value) => utf8ByteLength(value) <= PASSWORD_MAX_BYTES, TOO_LONG_MESSAGE);
+var newPasswordSchema = z3.string().min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`).refine((value) => utf8ByteLength(value) <= PASSWORD_MAX_BYTES, TOO_LONG_MESSAGE).refine((value) => /[a-z]/.test(value), "Password must contain a lowercase letter.").refine((value) => /[A-Z]/.test(value), "Password must contain an uppercase letter.").refine((value) => /\d/.test(value), "Password must contain a digit.");
 
 // ../packages/contracts/src/auth.ts
 var loginSchema = z4.strictObject({
@@ -375,13 +370,55 @@ var inquirySchema = z6.object({
   phone: z6.string(),
   message: z6.string(),
   createdAt: z6.iso.datetime(),
-  statusUpdatedAt: z6.iso.datetime().nullable()
+  statusUpdatedAt: z6.iso.datetime().nullable(),
+  /** Owner, or null when nobody has picked it up. */
+  assignedToAdminId: z6.uuid().nullable(),
+  assignedToName: z6.string().nullable()
+});
+var inquiryNoteSchema = z6.object({
+  id: z6.uuid(),
+  body: z6.string(),
+  authorName: z6.string(),
+  authorAdminId: z6.uuid().nullable(),
+  createdAt: z6.iso.datetime(),
+  /** Whether the caller wrote this note, and may therefore delete it. */
+  deletableByViewer: z6.boolean()
+});
+var NOTE_MIN_LENGTH = 1;
+var NOTE_MAX_LENGTH = 2e3;
+var createNoteSchema = z6.strictObject({
+  body: z6.string().trim().pipe(
+    z6.string().min(NOTE_MIN_LENGTH, "Write something before saving.").max(NOTE_MAX_LENGTH, `A note must be ${NOTE_MAX_LENGTH} characters or fewer.`).refine(
+      (value) => !containsControlCharacters(value, TEXT_BLOCK_ALLOWED_CONTROLS),
+      "The note contains unsupported characters."
+    )
+  )
+});
+var assignInquirySchema = z6.strictObject({
+  assignedToAdminId: z6.uuid().nullable()
+});
+var inquiryTimelineEntrySchema = z6.object({
+  id: z6.uuid(),
+  kind: z6.enum(["status_changed", "assigned", "note_added", "note_deleted"]),
+  actorName: z6.string().nullable(),
+  createdAt: z6.iso.datetime(),
+  /** Human-readable summary, assembled server-side from the event detail. */
+  summary: z6.string()
+});
+var inquiryDetailSchema = z6.object({
+  inquiry: inquirySchema,
+  notes: z6.array(inquiryNoteSchema),
+  timeline: z6.array(inquiryTimelineEntrySchema)
 });
 var updateInquiryStatusSchema = z6.strictObject({
   status: inquiryStatusSchema
 });
 var inquiryIdParamSchema = z6.strictObject({
   id: z6.uuid("Inquiry id must be a UUID.")
+});
+var inquiryNoteParamsSchema = z6.strictObject({
+  id: z6.uuid("Inquiry id must be a UUID."),
+  noteId: z6.uuid("Note id must be a UUID.")
 });
 
 // ../packages/contracts/src/inquiry-query.ts
@@ -396,6 +433,16 @@ function emptyToUndefined(value) {
 var listInquiriesQuerySchema = z7.strictObject({
   category: z7.preprocess(emptyToUndefined, inquiryCategorySchema.optional()),
   userType: z7.preprocess(emptyToUndefined, userTypeSchema.optional()),
+  status: z7.preprocess(emptyToUndefined, inquiryStatusSchema.optional()),
+  /**
+   * An admin's id, or the literal `unassigned`. A sentinel rather than an
+   * empty string, because "nobody owns this" is a filter a staff member
+   * actually wants, and an empty value already means "no filter at all".
+   */
+  assignedTo: z7.preprocess(
+    emptyToUndefined,
+    z7.union([z7.literal("unassigned"), z7.uuid("Assignee must be an admin id.")]).optional()
+  ),
   search: z7.preprocess(
     emptyToUndefined,
     z7.string().trim().min(SEARCH_MIN_LENGTH, `Search needs at least ${SEARCH_MIN_LENGTH} characters.`).max(SEARCH_MAX_LENGTH, `Search must be ${SEARCH_MAX_LENGTH} characters or fewer.`).optional()
@@ -1918,8 +1965,13 @@ function decodeCursor(cursor) {
 
 // src/modules/inquiries/inquiries.repository.ts
 var INQUIRY_COLUMNS = `
-  id, user_type, category, status, full_name, email, phone, message,
-  created_at, status_updated_at
+  i.id, i.user_type, i.category, i.status, i.full_name, i.email, i.phone, i.message,
+  i.created_at, i.status_updated_at, i.assigned_to_admin_id,
+  owner.full_name as assigned_to_name
+`;
+var INQUIRY_FROM = `
+  from inquiries i
+  left join admins owner on owner.id = i.assigned_to_admin_id
 `;
 function toInquiry(row) {
   return {
@@ -1932,29 +1984,43 @@ function toInquiry(row) {
     phone: row.phone,
     message: row.message,
     createdAt: row.created_at.toISOString(),
-    statusUpdatedAt: row.status_updated_at?.toISOString() ?? null
+    statusUpdatedAt: row.status_updated_at?.toISOString() ?? null,
+    assignedToAdminId: row.assigned_to_admin_id,
+    assignedToName: row.assigned_to_name
   };
 }
 function buildFilters(query, params) {
   const clauses = [];
   if (query.category !== void 0) {
     params.push(query.category);
-    clauses.push(`category = $${params.length}`);
+    clauses.push(`i.category = $${params.length}`);
   }
   if (query.userType !== void 0) {
     params.push(query.userType);
-    clauses.push(`user_type = $${params.length}`);
+    clauses.push(`i.user_type = $${params.length}`);
+  }
+  if (query.status !== void 0) {
+    params.push(query.status);
+    clauses.push(`i.status = $${params.length}`);
+  }
+  if (query.assignedTo !== void 0) {
+    if (query.assignedTo === "unassigned") {
+      clauses.push(`i.assigned_to_admin_id is null`);
+    } else {
+      params.push(query.assignedTo);
+      clauses.push(`i.assigned_to_admin_id = $${params.length}`);
+    }
   }
   if (query.search !== void 0) {
     params.push(toContainsPattern(query.search));
     const namePattern = `$${params.length}`;
     const phoneFragment = toPhoneSearchFragment(query.search);
     if (phoneFragment === void 0) {
-      clauses.push(`full_name ILIKE ${namePattern} ESCAPE '${LIKE_ESCAPE_CHARACTER}'`);
+      clauses.push(`i.full_name ILIKE ${namePattern} ESCAPE '${LIKE_ESCAPE_CHARACTER}'`);
     } else {
       params.push(toContainsPattern(phoneFragment));
       clauses.push(
-        `(full_name ILIKE ${namePattern} ESCAPE '${LIKE_ESCAPE_CHARACTER}' OR phone LIKE $${params.length} ESCAPE '${LIKE_ESCAPE_CHARACTER}')`
+        `(i.full_name ILIKE ${namePattern} ESCAPE '${LIKE_ESCAPE_CHARACTER}' OR i.phone LIKE $${params.length} ESCAPE '${LIKE_ESCAPE_CHARACTER}')`
       );
     }
   }
@@ -1967,14 +2033,14 @@ async function listInquiries(query) {
   if (query.cursor !== void 0) {
     const position = decodeCursor(query.cursor);
     params.push(position.createdAt, position.id);
-    keyset = ` AND (created_at, id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
+    keyset = ` AND (i.created_at, i.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
   }
   params.push(query.limit + 1);
   const { rows } = await pool.query(
     `select ${INQUIRY_COLUMNS}
-       from inquiries
+       ${INQUIRY_FROM}
       where true${filters}${keyset}
-      order by created_at desc, id desc
+      order by i.created_at desc, i.id desc
       limit $${params.length}`,
     params
   );
@@ -1991,11 +2057,11 @@ async function summariseInquiries(query) {
   const filters = buildFilters(query, params);
   const { rows } = await pool.query(
     `select count(*) as total,
-            count(*) filter (where status = 'new')         as new_count,
-            count(*) filter (where status = 'in_progress') as in_progress_count,
-            count(*) filter (where status = 'resolved')    as resolved_count,
-            count(*) filter (where status = 'closed')      as closed_count
-       from inquiries
+            count(*) filter (where i.status = 'new')         as new_count,
+            count(*) filter (where i.status = 'in_progress') as in_progress_count,
+            count(*) filter (where i.status = 'resolved')    as resolved_count,
+            count(*) filter (where i.status = 'closed')      as closed_count
+       ${INQUIRY_FROM}
       where true${filters}`,
     params
   );
@@ -2022,9 +2088,9 @@ async function listInquiriesForExport(query, rowLimit) {
   params.push(rowLimit + 1);
   const { rows } = await pool.query(
     `select ${INQUIRY_COLUMNS}
-       from inquiries
+       ${INQUIRY_FROM}
       where true${filters}
-      order by created_at desc, id desc
+      order by i.created_at desc, i.id desc
       limit $${params.length}`,
     params
   );
@@ -2069,18 +2135,143 @@ async function createInquiry(input, idempotencyKey, client = pool) {
 }
 async function updateInquiryStatus(id, status, adminId, client = pool) {
   const { rows } = await client.query(
-    `update inquiries
+    `with before as (select status from inquiries where id = $1)
+     update inquiries i
         set status = $2, status_updated_at = now(), status_updated_by = $3
-      where id = $1
-      returning ${INQUIRY_COLUMNS}`,
+      where i.id = $1
+      returning ${INQUIRY_COLUMNS.replace("owner.full_name as assigned_to_name", "null as assigned_to_name")},
+                (select status from before) as previous_status`,
     [id, status, adminId]
+  );
+  const row = rows[0];
+  if (row === void 0) {
+    return void 0;
+  }
+  const full = await findInquiryById(id, client);
+  return {
+    inquiry: full ?? toInquiry(row),
+    previousStatus: row.previous_status
+  };
+}
+async function findInquiryById(id, client = pool) {
+  const { rows } = await client.query(
+    `select ${INQUIRY_COLUMNS} ${INQUIRY_FROM} where i.id = $1 limit 1`,
+    [id]
   );
   const row = rows[0];
   return row === void 0 ? void 0 : toInquiry(row);
 }
+async function assignInquiry(id, assignedToAdminId, client = pool) {
+  const { rowCount } = await client.query(
+    `update inquiries set assigned_to_admin_id = $2 where id = $1`,
+    [id, assignedToAdminId]
+  );
+  if ((rowCount ?? 0) === 0) {
+    return void 0;
+  }
+  return findInquiryById(id, client);
+}
+function toNote(row, viewerAdminId) {
+  return {
+    id: row.id,
+    body: row.body,
+    authorName: row.author_name,
+    authorAdminId: row.admin_id,
+    createdAt: row.created_at.toISOString(),
+    deletableByViewer: row.admin_id === viewerAdminId
+  };
+}
+async function listInquiryNotes(inquiryId, viewerAdminId, client = pool) {
+  const { rows } = await client.query(
+    `select id, body, author_name, admin_id, created_at
+       from inquiry_notes
+      where inquiry_id = $1
+      order by created_at desc, id desc`,
+    [inquiryId]
+  );
+  return rows.map((row) => toNote(row, viewerAdminId));
+}
+async function insertInquiryNote(input, client = pool) {
+  const { rows } = await client.query(
+    `insert into inquiry_notes (inquiry_id, admin_id, author_name, body)
+     values ($1, $2, $3, $4)
+     returning id, body, author_name, admin_id, created_at`,
+    [input.inquiryId, input.adminId, input.authorName, input.body]
+  );
+  const row = rows[0];
+  if (row === void 0) {
+    throw new Error("Note insert returned no row");
+  }
+  return toNote(row, input.adminId);
+}
+async function deleteInquiryNote(input, client = pool) {
+  const { rowCount } = await client.query(
+    `delete from inquiry_notes where id = $1 and inquiry_id = $2 and admin_id = $3`,
+    [input.noteId, input.inquiryId, input.adminId]
+  );
+  return (rowCount ?? 0) > 0;
+}
+var TIMELINE_KIND = {
+  inquiry_status_changed: "status_changed",
+  inquiry_assigned: "assigned",
+  inquiry_note_added: "note_added",
+  inquiry_note_deleted: "note_deleted"
+};
+function asText(value) {
+  return typeof value === "string" && value.length > 0 ? value : void 0;
+}
+function summarise(row) {
+  const label = (value) => {
+    const key = asText(value);
+    return key !== void 0 && key in INQUIRY_STATUS_LABELS ? INQUIRY_STATUS_LABELS[key] : "unknown";
+  };
+  switch (row.event_type) {
+    case "inquiry_status_changed": {
+      const from = asText(row.detail.previousStatus);
+      return from === void 0 ? `Status set to ${label(row.detail.status)}` : `Status moved from ${label(from)} to ${label(row.detail.status)}`;
+    }
+    case "inquiry_assigned": {
+      const to = asText(row.detail.assignedToName);
+      return to === void 0 ? "Unassigned" : `Assigned to ${to}`;
+    }
+    case "inquiry_note_added":
+      return "Added a note";
+    case "inquiry_note_deleted":
+      return "Deleted a note";
+    default:
+      return "Updated";
+  }
+}
+async function listInquiryTimeline(inquiryId, client = pool) {
+  const { rows } = await client.query(
+    `select e.id, e.event_type, e.detail, e.created_at, actor.full_name as actor_name
+       from security_events e
+       left join admins actor on actor.id = e.admin_id
+      where e.detail ->> 'inquiryId' = $1
+        and e.event_type in ('inquiry_status_changed', 'inquiry_assigned',
+                             'inquiry_note_added', 'inquiry_note_deleted')
+      order by e.created_at desc
+      limit 100`,
+    [inquiryId]
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    kind: TIMELINE_KIND[row.event_type] ?? "status_changed",
+    actorName: row.actor_name,
+    createdAt: row.created_at.toISOString(),
+    summary: summarise(row)
+  }));
+}
 
 // src/modules/inquiries/inquiries.routes.ts
 var inquiriesRouter = Router4();
+function requireAdminPrincipal(req) {
+  const admin = req.admin;
+  if (admin === void 0) {
+    throw new TokenInvalidError();
+  }
+  return admin;
+}
 var idempotencyKeySchema = z10.uuid();
 function readIdempotencyKey(headerValue) {
   if (headerValue === void 0) {
@@ -2180,6 +2371,24 @@ inquiriesRouter.get(
     res.status(200).json(await listInquiries(query));
   }
 );
+inquiriesRouter.get(
+  "/:id",
+  requireAdmin,
+  validateParams(inquiryIdParamSchema),
+  async (req, res) => {
+    const admin = requireAdminPrincipal(req);
+    const { id } = req.validatedParams;
+    const inquiry = await findInquiryById(id);
+    if (inquiry === void 0) {
+      throw new NotFoundError("inquiry");
+    }
+    const [notes, timeline] = await Promise.all([
+      listInquiryNotes(id, admin.adminId),
+      listInquiryTimeline(id)
+    ]);
+    res.status(200).json({ inquiry, notes, timeline });
+  }
+);
 inquiriesRouter.patch(
   "/:id/status",
   requireAdmin,
@@ -2187,10 +2396,7 @@ inquiriesRouter.patch(
   validateParams(inquiryIdParamSchema),
   validateBody(updateInquiryStatusSchema),
   async (req, res) => {
-    const admin = req.admin;
-    if (admin === void 0) {
-      throw new TokenInvalidError();
-    }
+    const admin = requireAdminPrincipal(req);
     const { id } = req.validatedParams;
     const { status } = req.body;
     const updated = await updateInquiryStatus(id, status, admin.adminId);
@@ -2203,11 +2409,110 @@ inquiriesRouter.patch(
         adminId: admin.adminId,
         ipAddress: req.ip,
         requestId: req.requestId,
-        detail: { inquiryId: id, status }
+        detail: { inquiryId: id, status, previousStatus: updated.previousStatus }
       },
       (error) => req.log.error({ err: error }, "Failed to record status change")
     );
+    res.status(200).json({ inquiry: updated.inquiry });
+  }
+);
+inquiriesRouter.patch(
+  "/:id/assignment",
+  requireAdmin,
+  requireCsrfToken,
+  validateParams(inquiryIdParamSchema),
+  validateBody(assignInquirySchema),
+  async (req, res) => {
+    const admin = requireAdminPrincipal(req);
+    const { id } = req.validatedParams;
+    const { assignedToAdminId } = req.body;
+    if (assignedToAdminId !== null) {
+      const assignee = await findLiveAdminById(assignedToAdminId);
+      if (assignee === void 0) {
+        throw new ValidationError({
+          assignedToAdminId: ["That admin account does not exist or is no longer active."]
+        });
+      }
+    }
+    const updated = await assignInquiry(id, assignedToAdminId);
+    if (updated === void 0) {
+      throw new NotFoundError("inquiry");
+    }
+    await recordSecurityEvent(
+      {
+        eventType: "inquiry_assigned",
+        adminId: admin.adminId,
+        ipAddress: req.ip,
+        requestId: req.requestId,
+        detail: {
+          inquiryId: id,
+          assignedToAdminId,
+          assignedToName: updated.assignedToName
+        }
+      },
+      (error) => req.log.error({ err: error }, "Failed to record assignment")
+    );
     res.status(200).json({ inquiry: updated });
+  }
+);
+inquiriesRouter.post(
+  "/:id/notes",
+  requireAdmin,
+  requireCsrfToken,
+  validateParams(inquiryIdParamSchema),
+  validateBody(createNoteSchema),
+  async (req, res) => {
+    const admin = requireAdminPrincipal(req);
+    const { id } = req.validatedParams;
+    const { body } = req.body;
+    const inquiry = await findInquiryById(id);
+    if (inquiry === void 0) {
+      throw new NotFoundError("inquiry");
+    }
+    const note = await insertInquiryNote({
+      inquiryId: id,
+      adminId: admin.adminId,
+      authorName: admin.fullName,
+      body
+    });
+    await recordSecurityEvent(
+      {
+        eventType: "inquiry_note_added",
+        adminId: admin.adminId,
+        ipAddress: req.ip,
+        requestId: req.requestId,
+        // The note's own text is deliberately absent: the security log is not
+        // where third-party personal data belongs.
+        detail: { inquiryId: id, noteId: note.id }
+      },
+      (error) => req.log.error({ err: error }, "Failed to record note")
+    );
+    res.status(201).json({ note });
+  }
+);
+inquiriesRouter.delete(
+  "/:id/notes/:noteId",
+  requireAdmin,
+  requireCsrfToken,
+  validateParams(inquiryNoteParamsSchema),
+  async (req, res) => {
+    const admin = requireAdminPrincipal(req);
+    const { id, noteId } = req.validatedParams;
+    const deleted = await deleteInquiryNote({ noteId, inquiryId: id, adminId: admin.adminId });
+    if (!deleted) {
+      throw new NotFoundError("note");
+    }
+    await recordSecurityEvent(
+      {
+        eventType: "inquiry_note_deleted",
+        adminId: admin.adminId,
+        ipAddress: req.ip,
+        requestId: req.requestId,
+        detail: { inquiryId: id, noteId }
+      },
+      (error) => req.log.error({ err: error }, "Failed to record note deletion")
+    );
+    res.status(204).send();
   }
 );
 

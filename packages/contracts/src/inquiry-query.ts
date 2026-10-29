@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { inquiryCategorySchema, userTypeSchema } from './enums.js';
+import { inquiryCategorySchema, inquiryStatusSchema, userTypeSchema } from './enums.js';
 
 export const SEARCH_MIN_LENGTH = 2;
 export const SEARCH_MAX_LENGTH = 80;
@@ -26,6 +26,17 @@ function emptyToUndefined(value: unknown): unknown {
 export const listInquiriesQuerySchema = z.strictObject({
   category: z.preprocess(emptyToUndefined, inquiryCategorySchema.optional()),
   userType: z.preprocess(emptyToUndefined, userTypeSchema.optional()),
+  status: z.preprocess(emptyToUndefined, inquiryStatusSchema.optional()),
+
+  /**
+   * An admin's id, or the literal `unassigned`. A sentinel rather than an
+   * empty string, because "nobody owns this" is a filter a staff member
+   * actually wants, and an empty value already means "no filter at all".
+   */
+  assignedTo: z.preprocess(
+    emptyToUndefined,
+    z.union([z.literal('unassigned'), z.uuid('Assignee must be an admin id.')]).optional(),
+  ),
 
   search: z.preprocess(
     emptyToUndefined,
