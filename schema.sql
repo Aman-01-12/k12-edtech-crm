@@ -323,6 +323,44 @@ CREATE INDEX IF NOT EXISTS refresh_tokens_expires_at_idx
 
 
 -- -----------------------------------------------------------------------------
+-- password_reset_tokens
+--
+-- The self-service "forgot password" flow (R19, ADR 0013). Same shape as
+-- refresh_tokens and for the same reason: a SHA-256 digest of a 32-byte random
+-- token, never the token itself, so a database leak alone cannot be used to
+-- reset anyone's password.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- CASCADE, unlike refresh_tokens' SET NULL: a reset token has no meaning once
+  -- its admin is gone, where a refresh-token audit trail does.
+  admin_id   UUID NOT NULL REFERENCES admins (id) ON DELETE CASCADE,
+
+  token_hash BYTEA NOT NULL UNIQUE
+             CONSTRAINT password_reset_tokens_hash_is_sha256
+             CHECK (octet_length(token_hash) = 32),
+
+  expires_at TIMESTAMPTZ NOT NULL,
+
+  -- NULL means unredeemed. A timestamp means used once already, which the
+  -- redemption query checks for; the row is kept rather than deleted so the
+  -- audit trail survives.
+  used_at    TIMESTAMPTZ,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT password_reset_tokens_expires_after_create CHECK (expires_at > created_at)
+);
+
+-- The redemption lookup and "does this admin already have a live token" check.
+CREATE INDEX IF NOT EXISTS password_reset_tokens_admin_active_idx
+  ON password_reset_tokens (admin_id)
+  WHERE used_at IS NULL;
+
+
+-- -----------------------------------------------------------------------------
 -- security_events
 --
 -- Append-only record of security-relevant actions. No `updated_at` and no
@@ -334,22 +372,11 @@ CREATE TABLE IF NOT EXISTS security_events (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
   -- Adding a value here is a deliberate schema change, which is the point: the
-  -- set of things worth auditing should not drift silently.
-  event_type  TEXT NOT NULL
-              CONSTRAINT security_events_type_valid
-              CHECK (event_type IN (
-                'login_success',
-                'login_failure',
-                'logout',
-                'session_compromised',
-                'rate_limit_exceeded',
-                'inquiry_status_changed',
-                -- An export removes personal data from the application's
-                -- boundary, so it is audited like a credential event.
-                'inquiry_exported',
-                'password_changed',
-                'admin_account_changed'
-              )),
+  -- set of things worth auditing should not drift silently. The permitted
+  -- values are declared once, below, rather than here, because an inline CHECK
+  -- only applies on first creation and this constraint has already needed to
+  -- grow since.
+  event_type  TEXT NOT NULL,
 
   -- SET NULL so an event outlives the account it refers to.
   admin_id    UUID REFERENCES admins (id) ON DELETE SET NULL,
@@ -372,6 +399,25 @@ CREATE TABLE IF NOT EXISTS security_events (
 
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- `CREATE TABLE IF NOT EXISTS` above is a no-op on a database that already has
+-- this table, so a value added to the CHECK after the table first existed
+-- would never reach it without this: drop and re-add the constraint
+-- unconditionally, converging to the current definition either way.
+ALTER TABLE security_events DROP CONSTRAINT IF EXISTS security_events_type_valid;
+ALTER TABLE security_events ADD CONSTRAINT security_events_type_valid
+  CHECK (event_type IN (
+    'login_success',
+    'login_failure',
+    'logout',
+    'session_compromised',
+    'rate_limit_exceeded',
+    'inquiry_status_changed',
+    'inquiry_exported',
+    'password_changed',
+    'admin_account_changed',
+    'password_reset_completed'
+  ));
 
 CREATE INDEX IF NOT EXISTS security_events_type_created_at_idx
   ON security_events (event_type, created_at DESC);
@@ -430,11 +476,12 @@ CREATE INDEX IF NOT EXISTS rate_limit_hits_window_start_idx
 -- those roles do not exist, so the same file can be used for local testing.
 -- -----------------------------------------------------------------------------
 
-ALTER TABLE inquiries       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE admins          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE refresh_tokens  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE security_events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE rate_limit_hits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inquiries             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admins                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE refresh_tokens        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE password_reset_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_events       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rate_limit_hits       ENABLE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
@@ -444,7 +491,7 @@ BEGIN
   LOOP
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = provider_role) THEN
       EXECUTE format(
-        'REVOKE ALL PRIVILEGES ON TABLE inquiries, admins, refresh_tokens, security_events, rate_limit_hits FROM %I',
+        'REVOKE ALL PRIVILEGES ON TABLE inquiries, admins, refresh_tokens, password_reset_tokens, security_events, rate_limit_hits FROM %I',
         provider_role
       );
     END IF;

@@ -20,3 +20,4 @@ It is to show it was a choice rather than a default, so a reviewer who disagrees
 | [0010](0010-admin-management-authorization.md) | Every admin can manage admins |
 | [0011](0011-database-tls-verification.md) | Database TLS verified by default |
 | [0012](0012-vercel-function-bundling.md) | The deployed API function is a committed esbuild bundle |
+| [0013](0013-password-reset-by-email.md) | Self-service password reset by email via Resend |

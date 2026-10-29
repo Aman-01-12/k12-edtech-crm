@@ -17,7 +17,8 @@ export type SecurityEventType =
   | 'inquiry_status_changed'
   | 'inquiry_exported'
   | 'password_changed'
-  | 'admin_account_changed';
+  | 'admin_account_changed'
+  | 'password_reset_completed';
 
 export interface SecurityEventInput {
   eventType: SecurityEventType;

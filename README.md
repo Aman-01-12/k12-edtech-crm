@@ -213,7 +213,12 @@ npm run dev
 | Dashboard | http://localhost:5173/admin |
 | API | http://localhost:4000/api/health |
 
-Forgot the admin password? There is no email delivery in this system, so recovery is an operator action:
+Forgot the admin password? There are two paths.
+
+**Self-service**, if `RESEND_API_KEY` and the other email variables are configured: use "Forgot your password?" on the sign-in screen.
+The link that arrives is single-use, expires in an hour, and signs you in once redeemed.
+
+**Operator reset**, which always works and needs no email provider:
 
 ```sh
 RESET_ADMIN_EMAIL=you@example.com \
@@ -223,6 +228,7 @@ npm run db:reset-password
 
 Both values come from the environment rather than from arguments, so neither lands in shell history, and the script never echoes the password back.
 It revokes every existing session for that account, so the old password cannot keep a stolen session alive.
+This path is kept deliberately: email can fail, and an operator recovery route should not disappear because a third-party provider is down.
 
 ### Scripts
 
@@ -273,6 +279,8 @@ Base path `/api/v1`. All bodies are JSON. All responses carry `X-Request-Id`.
 | `POST` | `/api/v1/auth/logout` | revokes the token family and clears the cookies |
 | `GET` | `/api/v1/auth/me` | the current session |
 | `POST` | `/api/v1/auth/change-password` | requires the current password; reissues the session |
+| `POST` | `/api/v1/auth/forgot-password` | sends a reset link; identical response whether or not the account exists |
+| `POST` | `/api/v1/auth/reset-password` | redeems a single-use reset token and signs the user in |
 
 ### Admin, authentication required
 
@@ -610,6 +618,8 @@ The point is not to prove the choice was right, but to show it was a choice rath
 | [0009](docs/adr/0009-visual-design-direction.md) | Slate and marigold, with a status rail |
 | [0010](docs/adr/0010-admin-management-authorization.md) | Every admin can manage admins |
 | [0011](docs/adr/0011-database-tls-verification.md) | Database TLS verified by default |
+| [0012](docs/adr/0012-vercel-function-bundling.md) | The deployed API function is a committed esbuild bundle |
+| [0013](docs/adr/0013-password-reset-by-email.md) | Self-service password reset by email via Resend |
 
 ---
 
@@ -617,7 +627,8 @@ The point is not to prove the choice was right, but to show it was a choice rath
 
 Stated plainly, because an unstated limit reads as an oversight.
 
-- **No email delivery.** Password recovery is an operator action (`npm run db:reset-password`), and a new admin's generated password is shown once in the UI for the inviting admin to pass on. Wiring a transactional email provider is the obvious next step; nothing in the design assumes its absence.
+- **Email is used for password reset only.** There are no notification or digest emails, and a new admin's generated password is still shown once in the UI for the inviting admin to pass on rather than emailed. The operator reset command remains the fallback for when delivery fails. [ADR 0013](docs/adr/0013-password-reset-by-email.md) records why this reversed an earlier "no email provider" constraint.
+- **A reset request cannot confirm whether an address has an account**, by design. What no implementation of this feature can hide is whether an email actually arrives, from someone who controls the destination inbox; that limit is stated rather than glossed over.
 - **Phone validation is India-only.** It matches the audience, and E.164 storage means widening it later is a schema-compatible change. [ADR 0006](docs/adr/0006-phone-number-validation.md) records the upgrade path.
 - **One privilege level.** Every admin can manage admins. With a single internal team this is honest; a column with one possible value is an unused field pretending to be a feature. [ADR 0010](docs/adr/0010-admin-management-authorization.md).
 - **The Supabase free tier pauses a project after seven days of inactivity.** If the live demo returns a database error, the project needs resuming from the dashboard.

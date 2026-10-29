@@ -24,6 +24,12 @@ const DashboardPage = lazy(async () => ({
 const SettingsPage = lazy(async () => ({
   default: (await import('./features/settings/SettingsPage')).SettingsPage,
 }));
+const ForgotPasswordPage = lazy(async () => ({
+  default: (await import('./features/auth/ForgotPasswordPage')).ForgotPasswordPage,
+}));
+const ResetPasswordPage = lazy(async () => ({
+  default: (await import('./features/auth/ResetPasswordPage')).ResetPasswordPage,
+}));
 
 function RouteFallback() {
   return (
@@ -64,6 +70,8 @@ createRoot(root).render(
             <Routes>
               <Route path="/" element={<InquiryFormPage />} />
               <Route path="/admin/login" element={<LoginPage />} />
+              <Route path="/admin/forgot-password" element={<ForgotPasswordPage />} />
+              <Route path="/admin/reset-password" element={<ResetPasswordPage />} />
               <Route
                 path="/admin/inquiries"
                 element={

@@ -134,7 +134,32 @@ const environmentSchema = z.object({
   RATE_LIMIT_EXPORT_WINDOW_MS: positiveIntSchema.default(900_000),
   RATE_LIMIT_EXPORT_MAX: positiveIntSchema.default(10),
 
+  // Both keyed on network, not on the submitted email: keying the request step
+  // on the email would let an attacker tell a rate-limited address from a
+  // fresh one, which is exactly the existence signal the generic response is
+  // trying to avoid.
+  RATE_LIMIT_FORGOT_PASSWORD_WINDOW_MS: positiveIntSchema.default(900_000),
+  RATE_LIMIT_FORGOT_PASSWORD_MAX: positiveIntSchema.default(5),
+  RATE_LIMIT_RESET_PASSWORD_WINDOW_MS: positiveIntSchema.default(900_000),
+  RATE_LIMIT_RESET_PASSWORD_MAX: positiveIntSchema.default(10),
+
   EXPORT_ROW_LIMIT: positiveIntSchema.max(50_000).default(5_000),
+
+  // No default for any of these four: a password-reset email is security
+  // sensitive, so a half-configured deployment should refuse to start rather
+  // than silently fail to send, or send from an unverified address.
+  RESEND_API_KEY: z.string().min(1, 'RESEND_API_KEY is required.'),
+  RESEND_FROM_EMAIL: z
+    .string()
+    .min(3, 'RESEND_FROM_EMAIL is required.')
+    .refine((value) => value.includes('@'), 'RESEND_FROM_EMAIL must contain an address.'),
+  PASSWORD_RESET_TOKEN_TTL: durationSchema.prefault('1h'),
+  // The frontend origin, used to build the link inside the reset email. Kept
+  // distinct from CORS_ALLOWED_ORIGINS, which is a list and exists to decide
+  // which origins may call the API, not to construct a URL.
+  APP_BASE_URL: z
+    .url('APP_BASE_URL must be a valid URL, such as https://example.com.')
+    .transform((value) => value.replace(/\/+$/, '')),
 });
 
 /**

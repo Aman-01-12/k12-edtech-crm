@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { standardSchemaResolver } from '@hookform/resolvers/standard-schema';
-import { useLocation, useNavigate, type Location } from 'react-router';
+import { Link, useLocation, useNavigate, type Location } from 'react-router';
 import { loginSchema, type AuthenticatedAdmin, type LoginInput } from '@k12/contracts';
 import { ApiRequestError, api } from '../../lib/api-client';
 import { Button } from '../../components/Button';
@@ -107,6 +107,15 @@ export function LoginPage() {
             Sign in
           </Button>
         </form>
+
+        <p className="mt-6 text-sm">
+          <Link
+            to="/admin/forgot-password"
+            className="font-medium text-ink-muted underline-offset-2 hover:text-marigold-deep hover:underline"
+          >
+            Forgot your password?
+          </Link>
+        </p>
       </div>
     </main>
   );

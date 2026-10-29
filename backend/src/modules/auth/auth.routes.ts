@@ -1,17 +1,23 @@
 import { Router } from 'express';
 import {
   changePasswordSchema,
+  forgotPasswordSchema,
   loginSchema,
+  resetPasswordSchema,
   type ChangePassword,
+  type ForgotPassword,
   type LoginCredentials,
   type LoginResponse,
+  type ResetPassword,
 } from '@k12/contracts';
 import { TokenInvalidError } from '../../errors/app-error.js';
 import { requireCsrfToken } from '../../middleware/csrf.js';
 import {
+  forgotPasswordLimiter,
   loginAccountLimiter,
   loginNetworkLimiter,
   refreshLimiter,
+  resetPasswordLimiter,
 } from '../../middleware/rate-limit.js';
 import { requireAdmin } from '../../middleware/require-admin.js';
 import { validateBody } from '../../middleware/validate.js';
@@ -25,6 +31,8 @@ import {
 } from './cookies.js';
 import {
   changePassword,
+  redeemPasswordReset,
+  requestPasswordReset,
   rotateRefreshToken,
   signIn,
   signOut,
@@ -135,6 +143,36 @@ authRouter.get('/me', requireAdmin, (req, res) => {
     admin: { id: admin.adminId, email: admin.email, fullName: admin.fullName },
   });
 });
+
+/**
+ * Request a reset link. Public, and deliberately uninformative: 202 with the
+ * same body whether or not the address has an account.
+ */
+authRouter.post(
+  '/forgot-password',
+  forgotPasswordLimiter,
+  validateBody(forgotPasswordSchema),
+  async (req, res) => {
+    const { email } = req.body as ForgotPassword;
+    await requestPasswordReset(email, contextFrom(req));
+
+    res.status(202).json({
+      message: 'If that address has an account, a reset link is on its way.',
+    });
+  },
+);
+
+/** Redeem a reset link. Public: the token in the body is the credential. */
+authRouter.post(
+  '/reset-password',
+  resetPasswordLimiter,
+  validateBody(resetPasswordSchema),
+  async (req, res) => {
+    const { token, newPassword } = req.body as ResetPassword;
+    const session = await redeemPasswordReset({ token, newPassword }, contextFrom(req));
+    respondWithSession(res, session);
+  },
+);
 
 authRouter.post(
   '/change-password',

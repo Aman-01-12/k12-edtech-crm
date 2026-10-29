@@ -107,6 +107,23 @@ export class SessionCompromisedError extends AppError {
   }
 }
 
+/**
+ * A password-reset token was missing, unknown, expired, or already redeemed.
+ *
+ * One message and one code for all four cases, for the same reason sign-in
+ * collapses a wrong password and an unknown address into one response: naming
+ * which reason it was would disclose whether the underlying email address has
+ * an account.
+ */
+export class ResetTokenInvalidError extends AppError {
+  readonly status = 400;
+  readonly code = API_ERROR_CODES.resetTokenInvalid;
+
+  constructor() {
+    super('This reset link is invalid or has expired. Request a new one.');
+  }
+}
+
 /** The double-submit CSRF token was absent or did not match. */
 export class CsrfTokenInvalidError extends AppError {
   readonly status = 403;

@@ -31,6 +31,7 @@ export const API_ERROR_CODES = {
   tokenInvalid: 'TOKEN_INVALID',
   sessionCompromised: 'SESSION_COMPROMISED',
   csrfTokenInvalid: 'CSRF_TOKEN_INVALID',
+  resetTokenInvalid: 'RESET_TOKEN_INVALID',
   notFound: 'NOT_FOUND',
   conflict: 'CONFLICT',
   payloadTooLarge: 'PAYLOAD_TOO_LARGE',

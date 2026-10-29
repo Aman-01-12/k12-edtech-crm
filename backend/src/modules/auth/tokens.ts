@@ -85,6 +85,12 @@ export function generateCsrfToken(): string {
   return randomBytes(32).toString('base64url');
 }
 
+/** Same shape and reasoning as a refresh token: opaque, random, digest-only. */
+export function generatePasswordResetToken(): GeneratedRefreshToken {
+  const token = randomBytes(REFRESH_TOKEN_BYTES).toString('base64url');
+  return { token, tokenHash: hashRefreshToken(token) };
+}
+
 /** Length is checked first because `timingSafeEqual` throws on a mismatch. */
 export function csrfTokensMatch(a: string, b: string): boolean {
   const left = Buffer.from(a, 'utf8');

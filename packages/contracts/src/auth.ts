@@ -86,6 +86,32 @@ export const changePasswordSchema = z.strictObject({
 
 export type ChangePassword = z.output<typeof changePasswordSchema>;
 
+/**
+ * Requesting a password-reset email.
+ *
+ * No other field: the response is identical whether or not the address has an
+ * account, so there is nothing else for this request to usefully carry.
+ */
+export const forgotPasswordSchema = z.strictObject({
+  email: emailSchema,
+});
+
+export type ForgotPassword = z.output<typeof forgotPasswordSchema>;
+
+/**
+ * Redeeming a password-reset link.
+ *
+ * `token` is opaque to this schema; its validity is checked against the
+ * database, not by shape. The new password goes through the strong-password
+ * schema, the same as any other newly chosen password.
+ */
+export const resetPasswordSchema = z.strictObject({
+  token: z.string().min(1, 'This reset link is missing its token.'),
+  newPassword: newPasswordSchema,
+});
+
+export type ResetPassword = z.output<typeof resetPasswordSchema>;
+
 /** An admin account as the management screen lists them. */
 export const adminSummarySchema = z.object({
   id: z.uuid(),

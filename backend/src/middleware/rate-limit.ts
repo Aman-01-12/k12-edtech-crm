@@ -109,6 +109,26 @@ export const refreshLimiter: RequestHandler = rateLimit({
   keyGenerator: (req) => rateLimitKey('refresh', networkSubject(req)),
 });
 
+/**
+ * Keyed on network, not on the submitted email. Keying on the email would let
+ * an attacker distinguish a rate-limited address from a fresh one, which is the
+ * account-existence signal the generic response exists to withhold.
+ */
+export const forgotPasswordLimiter: RequestHandler = rateLimit({
+  ...baseOptions(),
+  windowMs: config.RATE_LIMIT_FORGOT_PASSWORD_WINDOW_MS,
+  limit: config.RATE_LIMIT_FORGOT_PASSWORD_MAX,
+  keyGenerator: (req) => rateLimitKey('forgot-password', networkSubject(req)),
+});
+
+/** Caps guessing at a reset token, which is otherwise the one unauthenticated write. */
+export const resetPasswordLimiter: RequestHandler = rateLimit({
+  ...baseOptions(),
+  windowMs: config.RATE_LIMIT_RESET_PASSWORD_WINDOW_MS,
+  limit: config.RATE_LIMIT_RESET_PASSWORD_MAX,
+  keyGenerator: (req) => rateLimitKey('reset-password', networkSubject(req)),
+});
+
 /** Keyed on the account: an export removes personal data, and an account is accountable. */
 export const exportLimiter: RequestHandler = rateLimit({
   ...baseOptions(),

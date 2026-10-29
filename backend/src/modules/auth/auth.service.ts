@@ -4,9 +4,11 @@ import { config } from '../../config/env.js';
 import { withTransaction } from '../../db/transaction.js';
 import {
   InvalidCredentialsError,
+  ResetTokenInvalidError,
   SessionCompromisedError,
   TokenInvalidError,
 } from '../../errors/app-error.js';
+import { sendPasswordResetEmail } from '../../lib/email.js';
 import {
   findLiveAdminCredentialByEmail,
   findLiveAdminCredentialById,
@@ -14,6 +16,12 @@ import {
   updatePasswordHash,
 } from './admin.repository.js';
 import { hashPassword, verifyAgainstDummyHash, verifyPassword } from './password.js';
+import {
+  findResetTokenByHash,
+  insertPasswordResetToken,
+  invalidateOutstandingResetTokens,
+  markResetTokenUsed,
+} from './password-reset-token.repository.js';
 import {
   findByHashIncludingRevoked,
   insertRefreshToken,
@@ -24,6 +32,7 @@ import {
 import { recordSecurityEvent } from './security-event.repository.js';
 import {
   generateCsrfToken,
+  generatePasswordResetToken,
   generateRefreshToken,
   hashRefreshToken,
   signAccessToken,
@@ -353,5 +362,117 @@ export async function changePassword(
   );
 
   // A new family: the previous one was just revoked in its entirety.
+  return issueSession(admin, { familyId: randomUUID() }, context);
+}
+
+/**
+ * Starts the forgot-password flow.
+ *
+ * Returns nothing, and returns it identically whether the address has a live
+ * account, whether a token was issued, and whether the email was actually
+ * accepted by the provider. The caller therefore cannot branch on the outcome,
+ * which is what stops the response being an account-existence oracle (R19.1).
+ *
+ * The one thing this cannot hide is whether an email arrives, from someone who
+ * controls the destination inbox. That is inherent to email-based reset.
+ */
+export async function requestPasswordReset(email: string, context: RequestContext): Promise<void> {
+  const admin = await findLiveAdminCredentialByEmail(email);
+  if (admin === undefined) {
+    return;
+  }
+
+  const { token, tokenHash } = generatePasswordResetToken();
+  const expiresAt = new Date(Date.now() + config.PASSWORD_RESET_TOKEN_TTL.seconds * 1000);
+
+  await withTransaction(async (client) => {
+    // Issuing a new link retires any previous one, so a mailbox holding two
+    // emails does not hold two usable links.
+    await invalidateOutstandingResetTokens(admin.id, client);
+    await insertPasswordResetToken({ adminId: admin.id, tokenHash, expiresAt }, client);
+  });
+
+  const resetUrl = `${config.APP_BASE_URL}/admin/reset-password?token=${encodeURIComponent(token)}`;
+
+  const sent = await sendPasswordResetEmail({
+    to: admin.email,
+    resetUrl,
+    expiresInMinutes: Math.round(config.PASSWORD_RESET_TOKEN_TTL.seconds / 60),
+  });
+
+  if (!sent) {
+    // Logged by the email module. Recorded here as an audit note so an operator
+    // can tell "no email arrived" from "nobody asked", without the caller
+    // learning either.
+    context.onAuditFailure?.(new Error('Password reset email was not accepted by the provider'));
+  }
+}
+
+/**
+ * Completes the forgot-password flow.
+ *
+ * Validates and spends the token, replaces the password, revokes every existing
+ * refresh token, and issues a fresh session for the caller, which is the same
+ * closing sequence as `changePassword`.
+ *
+ * @throws ResetTokenInvalidError for an unknown, expired or already-spent
+ *   token, indistinguishably, so the error cannot be used to probe addresses.
+ */
+export async function redeemPasswordReset(
+  input: { token: string; newPassword: string },
+  context: RequestContext,
+): Promise<IssuedSession> {
+  const newHash = await hashPassword(input.newPassword);
+  const presentedHash = hashRefreshToken(input.token);
+
+  const admin = await withTransaction(async (client) => {
+    const stored = await findResetTokenByHash(presentedHash, client);
+
+    if (
+      stored === undefined ||
+      stored.used_at !== null ||
+      stored.expires_at.getTime() <= Date.now()
+    ) {
+      return undefined;
+    }
+
+    // Guarded update: if a concurrent request spent the token first, this
+    // returns false and the whole redemption is refused rather than applying
+    // the password change twice.
+    const claimed = await markResetTokenUsed(stored.id, client);
+    if (!claimed) {
+      return undefined;
+    }
+
+    const { rows } = await client.query<{ id: string; email: string; full_name: string }>(
+      `select id, email, full_name from admins where id = $1 and deleted_at is null limit 1`,
+      [stored.admin_id],
+    );
+    const adminRow = rows[0];
+    if (adminRow === undefined) {
+      return undefined;
+    }
+
+    await updatePasswordHash(adminRow.id, newHash, client);
+    await revokeAllForAdmin(adminRow.id, client);
+
+    return adminRow;
+  });
+
+  if (admin === undefined) {
+    throw new ResetTokenInvalidError();
+  }
+
+  await recordSecurityEvent(
+    {
+      eventType: 'password_reset_completed',
+      adminId: admin.id,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      requestId: context.requestId,
+    },
+    context.onAuditFailure,
+  );
+
   return issueSession(admin, { familyId: randomUUID() }, context);
 }
