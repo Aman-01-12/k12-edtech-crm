@@ -10,6 +10,7 @@ import {
   type UserType,
 } from '@k12/contracts';
 import { Button } from '../../components/Button';
+import { controlClass, selectClass, selectStyle } from '../../components/Field';
 import { StatusRail } from '../../components/StatusRail';
 import { apiDownloadUrl } from '../../lib/api-client';
 import { useSession } from '../auth/session';
@@ -86,7 +87,7 @@ export function DashboardPage() {
                 value={dashboard.filters.searchInput}
                 onChange={(event) => dashboard.setSearchInput(event.target.value)}
                 placeholder="Priya, or 98765"
-                className="rounded-lg border border-edge px-3 py-2"
+                className={controlClass}
               />
             </label>
 
@@ -99,7 +100,8 @@ export function DashboardPage() {
                     event.target.value === '' ? undefined : (event.target.value as InquiryCategory),
                   )
                 }
-                className="rounded-lg border border-edge px-3 py-2"
+                className={selectClass}
+                style={selectStyle}
               >
                 <option value="">All categories</option>
                 {INQUIRY_CATEGORIES.map((category) => (
@@ -119,7 +121,8 @@ export function DashboardPage() {
                     event.target.value === '' ? undefined : (event.target.value as UserType),
                   )
                 }
-                className="rounded-lg border border-edge px-3 py-2"
+                className={selectClass}
+                style={selectStyle}
               >
                 <option value="">All user types</option>
                 {USER_TYPES.map((type) => (

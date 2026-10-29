@@ -11,9 +11,10 @@ import {
   createInquirySchema,
   type CreateInquiryInput,
 } from '@k12/contracts';
+import { Link } from 'react-router';
 import { ApiRequestError, api } from '../../lib/api-client';
 import { Button } from '../../components/Button';
-import { Field, controlClass } from '../../components/Field';
+import { Field, controlClass, selectClass, selectStyle } from '../../components/Field';
 
 /**
  * The public inquiry form.
@@ -91,177 +92,212 @@ export function InquiryFormPage() {
     },
   );
 
-  if (phase.kind === 'submitted') {
-    return (
-      <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-5 py-12">
-        <div
-          className="rounded-card border border-sage bg-sage-wash p-8 text-center"
-          role="status"
-          aria-live="polite"
-        >
-          <h1 className="font-display text-2xl font-bold text-ink">Enquiry sent</h1>
-          <p className="mt-3 text-ink-muted">
-            Thank you. The K12 Hunar team has your enquiry and will be in touch on the phone number
-            or email you gave us.
-          </p>
-          <div className="mt-6 flex justify-center">
-            <Button onClick={() => setPhase({ kind: 'editing' })}>Send another enquiry</Button>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
   return (
-    <main className="mx-auto max-w-xl px-5 py-10 sm:py-16">
-      <header>
-        <p className="font-display text-sm font-semibold tracking-[0.18em] text-marigold-deep uppercase">
-          K12 Hunar
-        </p>
-        <h1 className="mt-2 font-display text-3xl font-bold text-ink sm:text-4xl">
-          Tell us what you need
-        </h1>
-        <p className="mt-3 text-ink-muted">
-          Scholarships, admissions, concerts, or anything else. Fill this in and the team will get
-          back to you.
-        </p>
-      </header>
+    <div className="relative min-h-screen">
+      {/* Marigold, named for this brand's own accent colour, photographed in
+          India. A quiet backdrop rather than a hero image: the gradients fade
+          it into the canvas colour everywhere the form card does not already
+          cover it. See public/images/CREDITS.md for the source and licence. */}
+      <div aria-hidden="true" className="fixed inset-0 overflow-hidden">
+        <img
+          src="/images/marigold-bg.webp"
+          alt=""
+          className="absolute top-0 right-0 h-full w-full scale-110 object-cover object-[62%_45%] sm:w-3/5"
+        />
+        <div className="absolute inset-0 bg-gradient-to-r from-canvas via-canvas/85 to-canvas/25 sm:to-canvas/10" />
+        <div className="absolute inset-0 bg-gradient-to-b from-canvas/5 via-transparent to-canvas" />
+      </div>
 
-      {phase.kind === 'failed' ? (
-        <div
-          role="alert"
-          className="mt-6 rounded-lg border border-clay bg-clay-wash px-4 py-3 text-sm font-medium text-clay"
-        >
-          {phase.message}
-        </div>
-      ) : null}
-
-      <form
-        onSubmit={(event) => void onSubmit(event)}
-        noValidate
-        className="mt-8 flex flex-col gap-5"
-      >
-        <div className="grid gap-5 sm:grid-cols-2">
-          <Field label="I am a" error={errors.userType?.message} required>
-            {(a11y) => (
-              <select {...a11y} {...register('userType')} className={controlClass} defaultValue="">
-                <option value="" disabled>
-                  Select one
-                </option>
-                {USER_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {USER_TYPE_LABELS[type]}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Field>
-
-          <Field label="This is about" error={errors.category?.message} required>
-            {(a11y) => (
-              <select {...a11y} {...register('category')} className={controlClass} defaultValue="">
-                <option value="" disabled>
-                  Select one
-                </option>
-                {INQUIRY_CATEGORIES.map((category) => (
-                  <option key={category} value={category}>
-                    {INQUIRY_CATEGORY_LABELS[category]}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Field>
-        </div>
-
-        <Field label="Full name" error={errors.fullName?.message} required>
-          {(a11y) => (
-            <input
-              {...a11y}
-              {...register('fullName')}
-              type="text"
-              autoComplete="name"
-              placeholder="Priya Sharma"
-              className={controlClass}
-            />
-          )}
-        </Field>
-
-        <div className="grid gap-5 sm:grid-cols-2">
-          <Field label="Email" error={errors.email?.message} required>
-            {(a11y) => (
-              <input
-                {...a11y}
-                {...register('email')}
-                type="email"
-                autoComplete="email"
-                placeholder="priya@example.com"
-                className={controlClass}
-              />
-            )}
-          </Field>
-
-          <Field
-            label="Phone number"
-            error={errors.phone?.message}
-            hint="10-digit Indian mobile number"
-            required
+      <div className="relative mx-auto max-w-xl px-5 py-6 sm:py-10">
+        <div className="flex items-center justify-between">
+          <p className="font-display text-sm font-semibold tracking-[0.18em] text-marigold-deep uppercase">
+            K12 Hunar
+          </p>
+          <Link
+            to="/admin/login"
+            className="text-sm font-medium text-ink-muted underline-offset-2 hover:text-marigold-deep hover:underline"
           >
-            {(a11y) => (
-              <input
-                {...a11y}
-                {...register('phone')}
-                type="tel"
-                inputMode="tel"
-                autoComplete="tel"
-                placeholder="98765 43210"
-                className={controlClass}
-              />
-            )}
-          </Field>
+            Staff sign in
+          </Link>
         </div>
 
-        <Field
-          label="Your question"
-          error={errors.message?.message}
-          hint={`${messageLength} of ${MESSAGE_MAX_LENGTH} characters`}
-          required
-        >
-          {(a11y) => (
-            <textarea
-              {...a11y}
-              {...register('message')}
-              rows={5}
-              placeholder="Tell us what you would like to know."
-              className={`${controlClass} resize-y`}
-            />
-          )}
-        </Field>
+        {phase.kind === 'submitted' ? (
+          <div
+            className="mt-10 rounded-card border border-sage bg-sage-wash p-8 text-center shadow-sm sm:mt-16"
+            role="status"
+            aria-live="polite"
+          >
+            <h1 className="font-display text-2xl font-bold text-ink">Enquiry sent</h1>
+            <p className="mt-3 text-ink-muted">
+              Thank you. The K12 Hunar team has your enquiry and will be in touch on the phone
+              number or email you gave us.
+            </p>
+            <div className="mt-6 flex justify-center">
+              <Button onClick={() => setPhase({ kind: 'editing' })}>Send another enquiry</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-6 rounded-card border border-edge bg-surface/95 p-6 shadow-sm backdrop-blur-sm sm:mt-10 sm:p-9">
+            <header>
+              <h1 className="font-display text-3xl font-bold text-ink sm:text-4xl">
+                Tell us what you need
+              </h1>
+              <p className="mt-3 text-ink-muted">
+                Scholarships, admissions, concerts, or anything else. Fill this in and the team will
+                get back to you.
+              </p>
+            </header>
 
-        {/*
+            {phase.kind === 'failed' ? (
+              <div
+                role="alert"
+                className="mt-6 rounded-lg border border-clay bg-clay-wash px-4 py-3 text-sm font-medium text-clay"
+              >
+                {phase.message}
+              </div>
+            ) : null}
+
+            <form
+              onSubmit={(event) => void onSubmit(event)}
+              noValidate
+              className="mt-8 flex flex-col gap-5"
+            >
+              <div className="grid gap-5 sm:grid-cols-2">
+                <Field label="I am a" error={errors.userType?.message} required>
+                  {(a11y) => (
+                    <select
+                      {...a11y}
+                      {...register('userType')}
+                      className={selectClass}
+                      style={selectStyle}
+                      defaultValue=""
+                    >
+                      <option value="" disabled>
+                        Select one
+                      </option>
+                      {USER_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {USER_TYPE_LABELS[type]}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
+
+                <Field label="This is about" error={errors.category?.message} required>
+                  {(a11y) => (
+                    <select
+                      {...a11y}
+                      {...register('category')}
+                      className={selectClass}
+                      style={selectStyle}
+                      defaultValue=""
+                    >
+                      <option value="" disabled>
+                        Select one
+                      </option>
+                      {INQUIRY_CATEGORIES.map((category) => (
+                        <option key={category} value={category}>
+                          {INQUIRY_CATEGORY_LABELS[category]}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </Field>
+              </div>
+
+              <Field label="Full name" error={errors.fullName?.message} required>
+                {(a11y) => (
+                  <input
+                    {...a11y}
+                    {...register('fullName')}
+                    type="text"
+                    autoComplete="name"
+                    placeholder="Priya Sharma"
+                    className={controlClass}
+                  />
+                )}
+              </Field>
+
+              <div className="grid gap-5 sm:grid-cols-2">
+                <Field label="Email" error={errors.email?.message} required>
+                  {(a11y) => (
+                    <input
+                      {...a11y}
+                      {...register('email')}
+                      type="email"
+                      autoComplete="email"
+                      placeholder="priya@example.com"
+                      className={controlClass}
+                    />
+                  )}
+                </Field>
+
+                <Field
+                  label="Phone number"
+                  error={errors.phone?.message}
+                  hint="10-digit Indian mobile number"
+                  required
+                >
+                  {(a11y) => (
+                    <input
+                      {...a11y}
+                      {...register('phone')}
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      placeholder="98765 43210"
+                      className={controlClass}
+                    />
+                  )}
+                </Field>
+              </div>
+
+              <Field
+                label="Your question"
+                error={errors.message?.message}
+                hint={`${messageLength} of ${MESSAGE_MAX_LENGTH} characters`}
+                required
+              >
+                {(a11y) => (
+                  <textarea
+                    {...a11y}
+                    {...register('message')}
+                    rows={5}
+                    placeholder="Tell us what you would like to know."
+                    className={`${controlClass} resize-y`}
+                  />
+                )}
+              </Field>
+
+              {/*
           Honeypot. Positioned off-screen rather than display:none, because some
           bots skip hidden fields; aria-hidden and tabIndex -1 keep it away from
           screen-reader and keyboard users. See middleware/honeypot.ts.
         */}
-        <div aria-hidden="true" className="absolute left-[-9999px] h-0 w-0 overflow-hidden">
-          <label htmlFor={HONEYPOT_FIELD}>Website</label>
-          <input
-            id={HONEYPOT_FIELD}
-            type="text"
-            tabIndex={-1}
-            autoComplete="off"
-            {...register(HONEYPOT_FIELD)}
-          />
-        </div>
+              <div aria-hidden="true" className="absolute left-[-9999px] h-0 w-0 overflow-hidden">
+                <label htmlFor={HONEYPOT_FIELD}>Website</label>
+                <input
+                  id={HONEYPOT_FIELD}
+                  type="text"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  {...register(HONEYPOT_FIELD)}
+                />
+              </div>
 
-        {/* Stacked on a phone: side by side, the helper text squeezed the
+              {/* Stacked on a phone: side by side, the helper text squeezed the
             button until its label wrapped onto two lines. */}
-        <div className="mt-2 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-4">
-          <Button type="submit" variant="primary" busy={isSubmitting} busyLabel="Sending">
-            Send enquiry
-          </Button>
-          <p className="text-xs text-ink-faint">We only use these details to reply to you.</p>
-        </div>
-      </form>
-    </main>
+              <div className="mt-2 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-4">
+                <Button type="submit" variant="primary" busy={isSubmitting} busyLabel="Sending">
+                  Send enquiry
+                </Button>
+                <p className="text-xs text-ink-faint">We only use these details to reply to you.</p>
+              </div>
+            </form>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

@@ -72,3 +72,20 @@ const CONTROL_CLASS =
   'hover:border-ink-faint aria-invalid:border-clay aria-invalid:bg-clay-wash';
 
 export const controlClass = CONTROL_CLASS;
+
+/**
+ * A `<select>` drawn with this project's own chevron and borders instead of
+ * the browser's native control chrome, which otherwise looks unstyled next to
+ * every other field. `appearance-none` removes the native arrow; the chevron
+ * below replaces it as a background image rather than a child element, so the
+ * control is still exactly one native `<select>` and keeps the keyboard and
+ * screen-reader behaviour that a custom listbox would have to re-implement.
+ */
+const SELECT_CHEVRON =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%234A6673' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")";
+
+export const selectClass =
+  `${CONTROL_CLASS} appearance-none bg-no-repeat pr-10 ` +
+  'bg-[length:12px_8px] bg-[position:right_1rem_center] cursor-pointer';
+
+export const selectStyle = { backgroundImage: SELECT_CHEVRON };
