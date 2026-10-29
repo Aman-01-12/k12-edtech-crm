@@ -42,11 +42,18 @@ export function Field({ label, error, hint, required = false, children }: FieldP
         {required ? <span className="sr-only"> (required)</span> : null}
       </label>
 
-      {hint === undefined ? null : (
-        <p id={hintId} className="text-xs text-ink-muted">
-          {hint}
-        </p>
-      )}
+      {/* Always rendered, even with nothing to say, so two fields side by side
+          in a grid row start their input boxes at the same height whether or
+          not one of them happens to have a hint. Without this, a field with a
+          hint pushes its input down while its neighbour's does not, and the
+          two boxes end up at different heights for no reason a user can see. */}
+      <p
+        id={hint === undefined ? undefined : hintId}
+        aria-hidden={hint === undefined ? true : undefined}
+        className="min-h-[1.125rem] text-xs text-ink-muted"
+      >
+        {hint ?? '\u00A0'}
+      </p>
 
       {children({
         id,
