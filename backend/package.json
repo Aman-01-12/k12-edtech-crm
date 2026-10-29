@@ -10,7 +10,8 @@
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
     "db:seed": "tsx --env-file=../.env src/scripts/seed-admin.ts",
-    "db:reset-password": "tsx --env-file=../.env src/scripts/reset-password.ts"
+    "db:reset-password": "tsx --env-file=../.env src/scripts/reset-password.ts",
+    "build:vercel": "node build-vercel-function.mjs"
   },
   "dependencies": {
     "@k12/contracts": "*",
@@ -36,6 +37,7 @@
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "@types/supertest": "7.2.1",
+    "esbuild": "0.28.2",
     "supertest": "7.3.1",
     "tsx": "4.23.15"
   }

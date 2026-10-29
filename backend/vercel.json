@@ -4,10 +4,10 @@
   "regions": ["hnd1"],
 
   "functions": {
-    "api/index.ts": {
+    "api/index.js": {
       "maxDuration": 15
     }
   },
 
-  "installCommand": "cd .. && npm ci"
+  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }]
 }
