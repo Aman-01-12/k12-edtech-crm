@@ -176,7 +176,8 @@ CREATE TABLE IF NOT EXISTS inquiries (
               CHECK (char_length(message) BETWEEN 10 AND 2000),
 
   -- Client-supplied key that makes a retried submission idempotent. The partial
-  -- unique index below is the actual exactly-once guarantee; see 0005.
+  -- unique index below is the actual exactly-once guarantee; see
+  -- docs/adr/0005-rate-limiting-and-idempotency.md.
   idempotency_key UUID,
 
   -- Who last moved this inquiry along, and when. SET NULL rather than CASCADE
