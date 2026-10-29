@@ -62,18 +62,42 @@ export async function findLiveAdminById(id: string): Promise<AdminAuthRecord | u
 }
 
 /**
- * Marks every access token issued up to now as no longer acceptable.
+ * Marks every access token issued before the current second as unacceptable,
+ * deliberately sparing one minted during it.
  *
- * Called alongside revoking refresh tokens. Revocation alone stops a session
- * being renewed but leaves the current access token valid until it expires,
- * which is the wrong outcome for a password change or reset: both exist partly
- * to evict someone who may already be holding a live session.
+ * Revoking refresh tokens alone stops a session being renewed but leaves the
+ * current access token valid until it expires, which is the wrong outcome for a
+ * password change or reset: both exist partly to evict someone already holding
+ * a live session. Those two operations issue a replacement session in the same
+ * second, and `iat` has only whole-second resolution, so the replacement cannot
+ * be told apart from the sessions being evicted and is spared with them.
  */
 export async function invalidateSessionsBefore(
   adminId: string,
   client: Queryable = pool,
 ): Promise<void> {
   await client.query(`update admins set sessions_invalidated_at = now() where id = $1`, [adminId]);
+}
+
+/**
+ * Marks every access token issued so far as unacceptable, including one minted
+ * during the current second.
+ *
+ * For theft detection, where no replacement session is issued and so nothing
+ * legitimate needs sparing. The cutoff is stamped a second ahead because `iat`
+ * carries whole seconds only: without the nudge, a token minted in the same
+ * second as the detection compares as not-before the cutoff and survives.
+ * The cost is that a fresh sign-in during that one second is refused and has
+ * to be retried, which is the right way round for a stolen token.
+ */
+export async function invalidateAllSessionsNow(
+  adminId: string,
+  client: Queryable = pool,
+): Promise<void> {
+  await client.query(
+    `update admins set sessions_invalidated_at = now() + interval '1 second' where id = $1`,
+    [adminId],
+  );
 }
 
 export async function markSignedIn(adminId: string): Promise<void> {

@@ -12,6 +12,7 @@ import { sendPasswordResetEmail } from '../../lib/email.js';
 import {
   findLiveAdminCredentialByEmail,
   findLiveAdminCredentialById,
+  invalidateAllSessionsNow,
   invalidateSessionsBefore,
   markSignedIn,
   updatePasswordHash,
@@ -204,7 +205,7 @@ export async function rotateRefreshToken(
       const revokedCount = await revokeFamily(stored.family_id, client);
       // Revoking the family only stops renewal; access tokens already issued
       // stay valid until they expire, which is too long to leave a thief in.
-      await invalidateSessionsBefore(stored.admin_id, client);
+      await invalidateAllSessionsNow(stored.admin_id, client);
       return {
         kind: 'replayed',
         adminId: stored.admin_id,

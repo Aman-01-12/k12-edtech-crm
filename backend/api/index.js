@@ -902,6 +902,12 @@ async function findLiveAdminById(id) {
 async function invalidateSessionsBefore(adminId, client = pool) {
   await client.query(`update admins set sessions_invalidated_at = now() where id = $1`, [adminId]);
 }
+async function invalidateAllSessionsNow(adminId, client = pool) {
+  await client.query(
+    `update admins set sessions_invalidated_at = now() + interval '1 second' where id = $1`,
+    [adminId]
+  );
+}
 async function markSignedIn(adminId) {
   await pool.query(`update admins set last_login_at = now() where id = $1`, [adminId]);
 }
@@ -1673,7 +1679,7 @@ async function rotateRefreshToken(presentedToken, context) {
     }
     if (stored.revoked_at !== null) {
       const revokedCount = await revokeFamily(stored.family_id, client);
-      await invalidateSessionsBefore(stored.admin_id, client);
+      await invalidateAllSessionsNow(stored.admin_id, client);
       return {
         kind: "replayed",
         adminId: stored.admin_id,
