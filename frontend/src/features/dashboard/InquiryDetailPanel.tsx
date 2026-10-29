@@ -9,6 +9,7 @@ import {
 import { Button } from '../../components/Button';
 import { selectClass, selectStyle } from '../../components/Field';
 import { StatusRail } from '../../components/StatusRail';
+import { ApiRequestError } from '../../lib/api-client';
 import { useInquiryDetail } from './useInquiryDetail';
 
 /**
@@ -42,8 +43,9 @@ export function InquiryDetailPanel({
   onClose,
   onChangeStatus,
 }: InquiryDetailPanelProps) {
-  const { detail, addNote, deleteNote, assign } = useInquiryDetail(inquiryId);
+  const { detail, addNote, deleteNote, assign, reply } = useInquiryDetail(inquiryId);
   const [noteBody, setNoteBody] = useState('');
+  const [composing, setComposing] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -112,7 +114,11 @@ export function InquiryDetailPanel({
                   value={inquiry.status}
                   describedFor={inquiry.fullName}
                   onChange={onChangeStatus}
+                  showAllLabels
                 />
+                <p className="mt-2 text-xs text-ink-faint">
+                  Click a stage to move this enquiry to it.
+                </p>
               </Section>
 
               <Section label="Owner">
@@ -160,15 +166,34 @@ export function InquiryDetailPanel({
                   >
                     Call
                   </a>
-                  <a
-                    href={`mailto:${inquiry.email}?subject=${encodeURIComponent(
-                      `Your ${INQUIRY_CATEGORY_LABELS[inquiry.category]} enquiry`,
-                    )}`}
+                  <button
+                    type="button"
+                    onClick={() => setComposing((open) => !open)}
+                    aria-expanded={composing}
                     className="inline-flex items-center rounded-lg border border-edge px-3 py-2 text-sm font-semibold hover:border-ink-faint"
                   >
-                    Reply by email
-                  </a>
+                    {composing ? 'Cancel reply' : 'Reply by email'}
+                  </button>
                 </div>
+
+                {composing ? (
+                  <ReplyComposer
+                    defaultSubject={`Re: your ${INQUIRY_CATEGORY_LABELS[
+                      inquiry.category
+                    ].toLowerCase()} enquiry`}
+                    recipient={inquiry.email}
+                    busy={reply.isPending}
+                    error={reply.error instanceof ApiRequestError ? reply.error.message : undefined}
+                    onSend={(input) =>
+                      reply.mutate(input, {
+                        onSuccess: () => {
+                          setComposing(false);
+                          reply.reset();
+                        },
+                      })
+                    }
+                  />
+                ) : null}
               </Section>
 
               <Section label="Their message">
@@ -179,7 +204,7 @@ export function InquiryDetailPanel({
                 </p>
               </Section>
 
-              <Section label="Internal notes">
+              <Section label="Notes and replies">
                 <form
                   onSubmit={(event) => {
                     event.preventDefault();
@@ -217,9 +242,21 @@ export function InquiryDetailPanel({
 
                 <ul className="mt-5 flex flex-col gap-4">
                   {(detail.data?.notes ?? []).map((note) => (
-                    <li key={note.id} className="border-l-2 border-marigold/40 pl-3">
+                    <li
+                      key={note.id}
+                      className={`border-l-2 pl-3 ${
+                        note.kind === 'reply' ? 'border-sage' : 'border-marigold/40'
+                      }`}
+                    >
                       <div className="flex items-baseline justify-between gap-3">
-                        <p className="text-xs font-semibold text-ink">{note.authorName}</p>
+                        <p className="text-xs font-semibold text-ink">
+                          {note.authorName}
+                          {note.kind === 'reply' ? (
+                            <span className="ml-2 rounded-full border border-sage bg-sage-wash px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-sage uppercase">
+                              Emailed
+                            </span>
+                          ) : null}
+                        </p>
                         <div className="flex items-center gap-2">
                           <time className="text-xs text-ink-faint">
                             {TIMESTAMP.format(new Date(note.createdAt))}
@@ -235,11 +272,14 @@ export function InquiryDetailPanel({
                           ) : null}
                         </div>
                       </div>
+                      {note.subject === null ? null : (
+                        <p className="mt-1 text-xs font-medium text-ink">{note.subject}</p>
+                      )}
                       <p className="mt-1 text-sm whitespace-pre-wrap text-ink-muted">{note.body}</p>
                     </li>
                   ))}
                   {(detail.data?.notes.length ?? 0) === 0 && !detail.isLoading ? (
-                    <li className="text-sm text-ink-faint">No notes yet.</li>
+                    <li className="text-sm text-ink-faint">Nothing recorded yet.</li>
                   ) : null}
                 </ul>
               </Section>
@@ -273,6 +313,87 @@ export function InquiryDetailPanel({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The reply composer.
+ *
+ * Collects only a subject and a message. The recipient is shown but not
+ * editable, because the server reads it from the enquiry and would ignore
+ * anything sent here anyway.
+ */
+function ReplyComposer({
+  defaultSubject,
+  recipient,
+  busy,
+  error,
+  onSend,
+}: {
+  defaultSubject: string;
+  recipient: string;
+  busy: boolean;
+  error: string | undefined;
+  onSend: (input: { subject: string; body: string }) => void;
+}) {
+  const [subject, setSubject] = useState(defaultSubject);
+  const [body, setBody] = useState('');
+  const canSend = subject.trim().length > 0 && body.trim().length > 0;
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canSend) {
+          onSend({ subject: subject.trim(), body: body.trim() });
+        }
+      }}
+      className="mt-4 flex flex-col gap-3 border-t border-edge pt-4"
+    >
+      <p className="text-xs text-ink-muted">
+        Sending to <span className="font-medium text-ink">{recipient}</span>. Their reply comes back
+        to your own address.
+      </p>
+
+      {error === undefined ? null : (
+        <p role="alert" className="text-sm font-medium text-clay">
+          {error}
+        </p>
+      )}
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="reply-subject" className="text-xs font-medium text-ink">
+          Subject
+        </label>
+        <input
+          id="reply-subject"
+          type="text"
+          value={subject}
+          onChange={(event) => setSubject(event.target.value)}
+          className="w-full rounded-lg border border-edge bg-surface px-3 py-2 text-sm"
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="reply-body" className="text-xs font-medium text-ink">
+          Message
+        </label>
+        <textarea
+          id="reply-body"
+          rows={6}
+          value={body}
+          onChange={(event) => setBody(event.target.value)}
+          placeholder="Thank you for getting in touch..."
+          className="w-full resize-y rounded-lg border border-edge bg-surface px-3 py-2 text-sm placeholder:text-ink-faint"
+        />
+      </div>
+
+      <div>
+        <Button type="submit" variant="primary" busy={busy} busyLabel="Sending" disabled={!canSend}>
+          Send email
+        </Button>
+      </div>
+    </form>
   );
 }
 

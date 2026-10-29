@@ -247,6 +247,24 @@ CREATE TABLE IF NOT EXISTS inquiry_notes (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Replies share this table with notes: both are "something a staff member
+-- wrote about this enquiry", and keeping them in one place means the panel
+-- shows one chronological thread rather than two lists to reconcile. A reply
+-- also went to the applicant, so it carries a subject and is never deletable.
+ALTER TABLE inquiry_notes ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'note';
+ALTER TABLE inquiry_notes DROP CONSTRAINT IF EXISTS inquiry_notes_kind_valid;
+ALTER TABLE inquiry_notes ADD CONSTRAINT inquiry_notes_kind_valid
+  CHECK (kind IN ('note', 'reply'));
+
+ALTER TABLE inquiry_notes ADD COLUMN IF NOT EXISTS subject TEXT;
+ALTER TABLE inquiry_notes DROP CONSTRAINT IF EXISTS inquiry_notes_subject_shape;
+-- A reply must carry a subject; a note must not.
+ALTER TABLE inquiry_notes ADD CONSTRAINT inquiry_notes_subject_shape
+  CHECK (
+    (kind = 'reply' AND subject IS NOT NULL AND char_length(subject) BETWEEN 1 AND 200)
+    OR (kind = 'note' AND subject IS NULL)
+  );
+
 -- The only query: this enquiry's notes, newest first.
 CREATE INDEX IF NOT EXISTS inquiry_notes_inquiry_created_at_idx
   ON inquiry_notes (inquiry_id, created_at DESC);
@@ -476,7 +494,10 @@ ALTER TABLE security_events ADD CONSTRAINT security_events_type_valid
     'password_reset_completed',
     'inquiry_assigned',
     'inquiry_note_added',
-    'inquiry_note_deleted'
+    'inquiry_note_deleted',
+    -- A reply sends this enquiry's personal data out by email, so it is
+    -- audited like the CSV export rather than treated as an ordinary edit.
+    'inquiry_replied'
   ));
 
 -- The enquiry timeline reads status changes and assignments straight out of

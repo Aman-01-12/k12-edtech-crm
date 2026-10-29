@@ -129,6 +129,19 @@ export const resetPasswordLimiter: RequestHandler = rateLimit({
   keyGenerator: (req) => rateLimitKey('reset-password', networkSubject(req)),
 });
 
+/**
+ * Replying emails a third party at the operator's cost and under the
+ * operator's sending reputation, so it is capped per account rather than left
+ * to whatever a compromised session could send in a minute.
+ */
+export const replyLimiter: RequestHandler = rateLimit({
+  ...baseOptions(),
+  windowMs: config.RATE_LIMIT_REPLY_WINDOW_MS,
+  limit: config.RATE_LIMIT_REPLY_MAX,
+  keyGenerator: (req) =>
+    rateLimitKey('reply', req.admin?.adminId ?? `unauthenticated:${networkSubject(req)}`),
+});
+
 /** Keyed on the account: an export removes personal data, and an account is accountable. */
 export const exportLimiter: RequestHandler = rateLimit({
   ...baseOptions(),

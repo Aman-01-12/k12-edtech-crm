@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Inquiry, InquiryCategory, InquiryStatus, Page, UserType } from '@k12/contracts';
+import type {
+  Inquiry,
+  InquiryCategory,
+  InquiryDetail,
+  InquiryStatus,
+  Page,
+  UserType,
+} from '@k12/contracts';
 import { INQUIRY_STATUSES } from '@k12/contracts';
 import { api } from '../../lib/api-client';
 
@@ -108,10 +115,21 @@ export function useInquiryDashboard() {
     mutationFn: ({ id, status }: { id: string; status: InquiryStatus }) =>
       api.patch<{ inquiry: Inquiry }>(`/inquiries/${id}/status`, { status }),
 
-    // Optimistic: the rail moves immediately and rolls back if the server says no.
+    /**
+     * Optimistic in both caches.
+     *
+     * The row and the open record are separate cache entries, so updating only
+     * the list made the rail snap instantly in the table but lag a round trip
+     * inside the panel, which read as the panel being broken.
+     */
     onMutate: async ({ id, status }) => {
-      await queryClient.cancelQueries({ queryKey: ['inquiries', queryString] });
-      const previous = queryClient.getQueryData<Page<Inquiry>>(['inquiries', queryString]);
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: ['inquiries', queryString] }),
+        queryClient.cancelQueries({ queryKey: ['inquiry', id] }),
+      ]);
+
+      const previousList = queryClient.getQueryData<Page<Inquiry>>(['inquiries', queryString]);
+      const previousDetail = queryClient.getQueryData<InquiryDetail>(['inquiry', id]);
 
       queryClient.setQueryData<Page<Inquiry>>(['inquiries', queryString], (current) =>
         current === undefined
@@ -122,12 +140,19 @@ export function useInquiryDashboard() {
             },
       );
 
-      return { previous };
+      queryClient.setQueryData<InquiryDetail>(['inquiry', id], (current) =>
+        current === undefined ? current : { ...current, inquiry: { ...current.inquiry, status } },
+      );
+
+      return { previousList, previousDetail };
     },
 
-    onError: (_error, _variables, context) => {
-      if (context?.previous !== undefined) {
-        queryClient.setQueryData(['inquiries', queryString], context.previous);
+    onError: (_error, variables, context) => {
+      if (context?.previousList !== undefined) {
+        queryClient.setQueryData(['inquiries', queryString], context.previousList);
+      }
+      if (context?.previousDetail !== undefined) {
+        queryClient.setQueryData(['inquiry', variables.id], context.previousDetail);
       }
     },
 

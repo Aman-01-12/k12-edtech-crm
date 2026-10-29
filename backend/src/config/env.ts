@@ -143,6 +143,11 @@ const environmentSchema = z.object({
   RATE_LIMIT_RESET_PASSWORD_WINDOW_MS: positiveIntSchema.default(900_000),
   RATE_LIMIT_RESET_PASSWORD_MAX: positiveIntSchema.default(10),
 
+  // Replying to an applicant sends mail on the operator's domain and at their
+  // cost, so it is bounded per admin account.
+  RATE_LIMIT_REPLY_WINDOW_MS: positiveIntSchema.default(3_600_000),
+  RATE_LIMIT_REPLY_MAX: positiveIntSchema.default(60),
+
   EXPORT_ROW_LIMIT: positiveIntSchema.max(50_000).default(5_000),
 
   // No default for any of these four: a password-reset email is security

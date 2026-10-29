@@ -380,11 +380,15 @@ export async function assignInquiry(
 
 interface NoteRow extends Record<string, unknown> {
   id: string;
+  kind: string;
+  subject: string | null;
   body: string;
   author_name: string;
   admin_id: string | null;
   created_at: Date;
 }
+
+const NOTE_COLUMNS = `id, kind, subject, body, author_name, admin_id, created_at`;
 
 /**
  * @param viewerAdminId - used only to mark which notes the caller may delete.
@@ -392,13 +396,18 @@ interface NoteRow extends Record<string, unknown> {
  *   flag, which is presentation.
  */
 function toNote(row: NoteRow, viewerAdminId: string): InquiryNote {
+  const kind = row.kind === 'reply' ? 'reply' : 'note';
   return {
     id: row.id,
+    kind,
+    subject: row.subject,
     body: row.body,
     authorName: row.author_name,
     authorAdminId: row.admin_id,
     createdAt: row.created_at.toISOString(),
-    deletableByViewer: row.admin_id === viewerAdminId,
+    // A reply has already been emailed, so deleting the record would leave the
+    // file claiming something was never sent.
+    deletableByViewer: kind === 'note' && row.admin_id === viewerAdminId,
   };
 }
 
@@ -408,7 +417,7 @@ export async function listInquiryNotes(
   client: Queryable = pool,
 ): Promise<InquiryNote[]> {
   const { rows } = await client.query<NoteRow>(
-    `select id, body, author_name, admin_id, created_at
+    `select ${NOTE_COLUMNS}
        from inquiry_notes
       where inquiry_id = $1
       order by created_at desc, id desc`,
@@ -418,14 +427,29 @@ export async function listInquiryNotes(
 }
 
 export async function insertInquiryNote(
-  input: { inquiryId: string; adminId: string; authorName: string; body: string },
+  input: {
+    inquiryId: string;
+    adminId: string;
+    authorName: string;
+    body: string;
+    /** A reply also went to the applicant and carries the subject it was sent with. */
+    subject?: string | undefined;
+  },
   client: Queryable = pool,
 ): Promise<InquiryNote> {
+  const isReply = input.subject !== undefined;
   const { rows } = await client.query<NoteRow>(
-    `insert into inquiry_notes (inquiry_id, admin_id, author_name, body)
-     values ($1, $2, $3, $4)
-     returning id, body, author_name, admin_id, created_at`,
-    [input.inquiryId, input.adminId, input.authorName, input.body],
+    `insert into inquiry_notes (inquiry_id, admin_id, author_name, body, kind, subject)
+     values ($1, $2, $3, $4, $5, $6)
+     returning ${NOTE_COLUMNS}`,
+    [
+      input.inquiryId,
+      input.adminId,
+      input.authorName,
+      input.body,
+      isReply ? 'reply' : 'note',
+      input.subject ?? null,
+    ],
   );
   const row = rows[0];
   if (row === undefined) {
@@ -469,6 +493,7 @@ const TIMELINE_KIND: Record<string, InquiryTimelineEntry['kind']> = {
   inquiry_assigned: 'assigned',
   inquiry_note_added: 'note_added',
   inquiry_note_deleted: 'note_deleted',
+  inquiry_replied: 'replied',
 };
 
 function asText(value: unknown): string | undefined {
@@ -499,6 +524,8 @@ function summarise(row: TimelineRow): string {
       return 'Added a note';
     case 'inquiry_note_deleted':
       return 'Deleted a note';
+    case 'inquiry_replied':
+      return 'Replied by email';
     default:
       return 'Updated';
   }
@@ -520,7 +547,8 @@ export async function listInquiryTimeline(
        left join admins actor on actor.id = e.admin_id
       where e.detail ->> 'inquiryId' = $1
         and e.event_type in ('inquiry_status_changed', 'inquiry_assigned',
-                             'inquiry_note_added', 'inquiry_note_deleted')
+                             'inquiry_note_added', 'inquiry_note_deleted',
+                             'inquiry_replied')
       order by e.created_at desc
       limit 100`,
     [inquiryId],

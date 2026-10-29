@@ -106,6 +106,10 @@ var environmentSchema = z.object({
   RATE_LIMIT_FORGOT_PASSWORD_MAX: positiveIntSchema.default(5),
   RATE_LIMIT_RESET_PASSWORD_WINDOW_MS: positiveIntSchema.default(9e5),
   RATE_LIMIT_RESET_PASSWORD_MAX: positiveIntSchema.default(10),
+  // Replying to an applicant sends mail on the operator's domain and at their
+  // cost, so it is bounded per admin account.
+  RATE_LIMIT_REPLY_WINDOW_MS: positiveIntSchema.default(36e5),
+  RATE_LIMIT_REPLY_MAX: positiveIntSchema.default(60),
   EXPORT_ROW_LIMIT: positiveIntSchema.max(5e4).default(5e3),
   // No default for any of these four: a password-reset email is security
   // sensitive, so a half-configured deployment should refuse to start rather
@@ -167,6 +171,7 @@ var API_ERROR_CODES = {
   conflict: "CONFLICT",
   payloadTooLarge: "PAYLOAD_TOO_LARGE",
   rateLimited: "RATE_LIMITED",
+  emailNotSent: "EMAIL_NOT_SENT",
   internalError: "INTERNAL_ERROR"
 };
 
@@ -377,11 +382,18 @@ var inquirySchema = z6.object({
 });
 var inquiryNoteSchema = z6.object({
   id: z6.uuid(),
+  /** `reply` was emailed to the applicant; `note` is internal only. */
+  kind: z6.enum(["note", "reply"]),
+  /** Present only on a reply. */
+  subject: z6.string().nullable(),
   body: z6.string(),
   authorName: z6.string(),
   authorAdminId: z6.uuid().nullable(),
   createdAt: z6.iso.datetime(),
-  /** Whether the caller wrote this note, and may therefore delete it. */
+  /**
+   * Whether the caller may delete this. Always false for a reply: it has
+   * already left the building, so removing the record would be a lie.
+   */
   deletableByViewer: z6.boolean()
 });
 var NOTE_MIN_LENGTH = 1;
@@ -394,12 +406,34 @@ var createNoteSchema = z6.strictObject({
     )
   )
 });
+var REPLY_SUBJECT_MAX_LENGTH = 200;
+var REPLY_BODY_MAX_LENGTH = 5e3;
+var replyToInquirySchema = z6.strictObject({
+  subject: z6.string().trim().pipe(
+    z6.string().min(1, "Give the email a subject.").max(
+      REPLY_SUBJECT_MAX_LENGTH,
+      `The subject must be ${REPLY_SUBJECT_MAX_LENGTH} characters or fewer.`
+    ).refine(
+      (value) => !containsControlCharacters(value),
+      "The subject cannot contain line breaks."
+    )
+  ),
+  body: z6.string().trim().pipe(
+    z6.string().min(1, "Write the message before sending.").max(
+      REPLY_BODY_MAX_LENGTH,
+      `The message must be ${REPLY_BODY_MAX_LENGTH} characters or fewer.`
+    ).refine(
+      (value) => !containsControlCharacters(value, TEXT_BLOCK_ALLOWED_CONTROLS),
+      "The message contains unsupported characters."
+    )
+  )
+});
 var assignInquirySchema = z6.strictObject({
   assignedToAdminId: z6.uuid().nullable()
 });
 var inquiryTimelineEntrySchema = z6.object({
   id: z6.uuid(),
-  kind: z6.enum(["status_changed", "assigned", "note_added", "note_deleted"]),
+  kind: z6.enum(["status_changed", "assigned", "note_added", "note_deleted", "replied"]),
   actorName: z6.string().nullable(),
   createdAt: z6.iso.datetime(),
   /** Human-readable summary, assembled server-side from the event detail. */
@@ -547,6 +581,13 @@ var RateLimitedError = class extends AppError {
   code = API_ERROR_CODES.rateLimited;
   constructor(retryAfterSeconds, message = "Too many requests. Please try again shortly.") {
     super(message, { retryAfterSeconds });
+  }
+};
+var EmailNotSentError = class extends AppError {
+  status = 502;
+  code = API_ERROR_CODES.emailNotSent;
+  constructor() {
+    super("The email could not be sent. Please try again, or contact them directly.");
   }
 };
 var InternalError = class extends AppError {
@@ -1421,6 +1462,12 @@ var resetPasswordLimiter = rateLimit({
   limit: config.RATE_LIMIT_RESET_PASSWORD_MAX,
   keyGenerator: (req) => rateLimitKey("reset-password", networkSubject(req))
 });
+var replyLimiter = rateLimit({
+  ...baseOptions(),
+  windowMs: config.RATE_LIMIT_REPLY_WINDOW_MS,
+  limit: config.RATE_LIMIT_REPLY_MAX,
+  keyGenerator: (req) => rateLimitKey("reply", req.admin?.adminId ?? `unauthenticated:${networkSubject(req)}`)
+});
 var exportLimiter = rateLimit({
   ...baseOptions(),
   windowMs: config.RATE_LIMIT_EXPORT_WINDOW_MS,
@@ -1437,7 +1484,7 @@ var resend = new Resend(config.RESEND_API_KEY);
 async function sendPasswordResetEmail(input) {
   const { to, resetUrl, expiresInMinutes } = input;
   const text = [
-    "Someone asked to reset the password for your K12 Hunar staff account.",
+    "Here is the link to reset the password for your K12 Hunar staff account.",
     "",
     "Open this link to choose a new password:",
     resetUrl,
@@ -1467,6 +1514,45 @@ async function sendPasswordResetEmail(input) {
     return true;
   } catch (error) {
     logger.error({ err: error }, "Password reset email could not be sent");
+    return false;
+  }
+}
+function escapeHtml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+async function sendInquiryReply(input) {
+  const { to, replyTo, subject, body, applicantName } = input;
+  const text = [
+    `Hello ${applicantName},`,
+    "",
+    body,
+    "",
+    "--",
+    "K12 Hunar",
+    `Reply to this email to reach us, or write to ${replyTo}.`
+  ].join("\n");
+  const html = [
+    `<p>Hello ${escapeHtml(applicantName)},</p>`,
+    `<p>${escapeHtml(body).replace(/\n/g, "<br />")}</p>`,
+    "<hr />",
+    `<p style="color:#4a6673;font-size:13px">K12 Hunar &middot; reply to this email, or write to ${escapeHtml(replyTo)}.</p>`
+  ].join("\n");
+  try {
+    const { error } = await resend.emails.send({
+      from: config.RESEND_FROM_EMAIL,
+      to,
+      replyTo,
+      subject,
+      text,
+      html
+    });
+    if (error !== null) {
+      logger.error({ err: error }, "Reply email rejected by the provider");
+      return false;
+    }
+    return true;
+  } catch (error) {
+    logger.error({ err: error }, "Reply email could not be sent");
     return false;
   }
 }
@@ -2176,19 +2262,25 @@ async function assignInquiry(id, assignedToAdminId, client = pool) {
   }
   return findInquiryById(id, client);
 }
+var NOTE_COLUMNS = `id, kind, subject, body, author_name, admin_id, created_at`;
 function toNote(row, viewerAdminId) {
+  const kind = row.kind === "reply" ? "reply" : "note";
   return {
     id: row.id,
+    kind,
+    subject: row.subject,
     body: row.body,
     authorName: row.author_name,
     authorAdminId: row.admin_id,
     createdAt: row.created_at.toISOString(),
-    deletableByViewer: row.admin_id === viewerAdminId
+    // A reply has already been emailed, so deleting the record would leave the
+    // file claiming something was never sent.
+    deletableByViewer: kind === "note" && row.admin_id === viewerAdminId
   };
 }
 async function listInquiryNotes(inquiryId, viewerAdminId, client = pool) {
   const { rows } = await client.query(
-    `select id, body, author_name, admin_id, created_at
+    `select ${NOTE_COLUMNS}
        from inquiry_notes
       where inquiry_id = $1
       order by created_at desc, id desc`,
@@ -2197,11 +2289,19 @@ async function listInquiryNotes(inquiryId, viewerAdminId, client = pool) {
   return rows.map((row) => toNote(row, viewerAdminId));
 }
 async function insertInquiryNote(input, client = pool) {
+  const isReply = input.subject !== void 0;
   const { rows } = await client.query(
-    `insert into inquiry_notes (inquiry_id, admin_id, author_name, body)
-     values ($1, $2, $3, $4)
-     returning id, body, author_name, admin_id, created_at`,
-    [input.inquiryId, input.adminId, input.authorName, input.body]
+    `insert into inquiry_notes (inquiry_id, admin_id, author_name, body, kind, subject)
+     values ($1, $2, $3, $4, $5, $6)
+     returning ${NOTE_COLUMNS}`,
+    [
+      input.inquiryId,
+      input.adminId,
+      input.authorName,
+      input.body,
+      isReply ? "reply" : "note",
+      input.subject ?? null
+    ]
   );
   const row = rows[0];
   if (row === void 0) {
@@ -2220,7 +2320,8 @@ var TIMELINE_KIND = {
   inquiry_status_changed: "status_changed",
   inquiry_assigned: "assigned",
   inquiry_note_added: "note_added",
-  inquiry_note_deleted: "note_deleted"
+  inquiry_note_deleted: "note_deleted",
+  inquiry_replied: "replied"
 };
 function asText(value) {
   return typeof value === "string" && value.length > 0 ? value : void 0;
@@ -2243,6 +2344,8 @@ function summarise(row) {
       return "Added a note";
     case "inquiry_note_deleted":
       return "Deleted a note";
+    case "inquiry_replied":
+      return "Replied by email";
     default:
       return "Updated";
   }
@@ -2254,7 +2357,8 @@ async function listInquiryTimeline(inquiryId, client = pool) {
        left join admins actor on actor.id = e.admin_id
       where e.detail ->> 'inquiryId' = $1
         and e.event_type in ('inquiry_status_changed', 'inquiry_assigned',
-                             'inquiry_note_added', 'inquiry_note_deleted')
+                             'inquiry_note_added', 'inquiry_note_deleted',
+                             'inquiry_replied')
       order by e.created_at desc
       limit 100`,
     [inquiryId]
@@ -2458,6 +2562,53 @@ inquiriesRouter.patch(
       (error) => req.log.error({ err: error }, "Failed to record assignment")
     );
     res.status(200).json({ inquiry: updated });
+  }
+);
+inquiriesRouter.post(
+  "/:id/reply",
+  requireAdmin,
+  requireCsrfToken,
+  replyLimiter,
+  validateParams(inquiryIdParamSchema),
+  validateBody(replyToInquirySchema),
+  async (req, res) => {
+    const admin = requireAdminPrincipal(req);
+    const { id } = req.validatedParams;
+    const { subject, body } = req.body;
+    const inquiry = await findInquiryById(id);
+    if (inquiry === void 0) {
+      throw new NotFoundError("inquiry");
+    }
+    const sent = await sendInquiryReply({
+      to: inquiry.email,
+      replyTo: admin.email,
+      subject,
+      body,
+      applicantName: inquiry.fullName
+    });
+    if (!sent) {
+      throw new EmailNotSentError();
+    }
+    const note = await insertInquiryNote({
+      inquiryId: id,
+      adminId: admin.adminId,
+      authorName: admin.fullName,
+      body,
+      subject
+    });
+    await recordSecurityEvent(
+      {
+        eventType: "inquiry_replied",
+        adminId: admin.adminId,
+        ipAddress: req.ip,
+        requestId: req.requestId,
+        // Subject only. The message body and the applicant's address stay out
+        // of the security log, same rule as everywhere else.
+        detail: { inquiryId: id, noteId: note.id, subject }
+      },
+      (error) => req.log.error({ err: error }, "Failed to record reply")
+    );
+    res.status(201).json({ note });
   }
 );
 inquiriesRouter.post(

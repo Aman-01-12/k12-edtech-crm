@@ -69,11 +69,18 @@ export type Inquiry = z.output<typeof inquirySchema>;
  */
 export const inquiryNoteSchema = z.object({
   id: z.uuid(),
+  /** `reply` was emailed to the applicant; `note` is internal only. */
+  kind: z.enum(['note', 'reply']),
+  /** Present only on a reply. */
+  subject: z.string().nullable(),
   body: z.string(),
   authorName: z.string(),
   authorAdminId: z.uuid().nullable(),
   createdAt: z.iso.datetime(),
-  /** Whether the caller wrote this note, and may therefore delete it. */
+  /**
+   * Whether the caller may delete this. Always false for a reply: it has
+   * already left the building, so removing the record would be a lie.
+   */
   deletableByViewer: z.boolean(),
 });
 
@@ -100,6 +107,56 @@ export const createNoteSchema = z.strictObject({
 
 export type CreateNote = z.output<typeof createNoteSchema>;
 
+export const REPLY_SUBJECT_MAX_LENGTH = 200;
+export const REPLY_BODY_MAX_LENGTH = 5000;
+
+/**
+ * Emailing the applicant back.
+ *
+ * Deliberately carries no recipient. The address is read from the enquiry row
+ * named in the path, so this endpoint cannot be pointed at an arbitrary
+ * mailbox and used as an open relay.
+ */
+export const replyToInquirySchema = z.strictObject({
+  subject: z
+    .string()
+    .trim()
+    .pipe(
+      z
+        .string()
+        .min(1, 'Give the email a subject.')
+        .max(
+          REPLY_SUBJECT_MAX_LENGTH,
+          `The subject must be ${REPLY_SUBJECT_MAX_LENGTH} characters or fewer.`,
+        )
+        // No line breaks: a newline in a header is how header injection works,
+        // and a subject has no use for one.
+        .refine(
+          (value) => !containsControlCharacters(value),
+          'The subject cannot contain line breaks.',
+        ),
+    ),
+
+  body: z
+    .string()
+    .trim()
+    .pipe(
+      z
+        .string()
+        .min(1, 'Write the message before sending.')
+        .max(
+          REPLY_BODY_MAX_LENGTH,
+          `The message must be ${REPLY_BODY_MAX_LENGTH} characters or fewer.`,
+        )
+        .refine(
+          (value) => !containsControlCharacters(value, TEXT_BLOCK_ALLOWED_CONTROLS),
+          'The message contains unsupported characters.',
+        ),
+    ),
+});
+
+export type ReplyToInquiry = z.output<typeof replyToInquirySchema>;
+
 /**
  * Reassigning an enquiry. `null` unassigns it, which is a real action rather
  * than an absent value, so the field is required and explicitly nullable.
@@ -116,7 +173,7 @@ export type AssignInquiry = z.output<typeof assignInquirySchema>;
  */
 export const inquiryTimelineEntrySchema = z.object({
   id: z.uuid(),
-  kind: z.enum(['status_changed', 'assigned', 'note_added', 'note_deleted']),
+  kind: z.enum(['status_changed', 'assigned', 'note_added', 'note_deleted', 'replied']),
   actorName: z.string().nullable(),
   createdAt: z.iso.datetime(),
   /** Human-readable summary, assembled server-side from the event detail. */

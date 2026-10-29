@@ -21,7 +21,8 @@ export type SecurityEventType =
   | 'password_reset_completed'
   | 'inquiry_assigned'
   | 'inquiry_note_added'
-  | 'inquiry_note_deleted';
+  | 'inquiry_note_deleted'
+  | 'inquiry_replied';
 
 export interface SecurityEventInput {
   eventType: SecurityEventType;

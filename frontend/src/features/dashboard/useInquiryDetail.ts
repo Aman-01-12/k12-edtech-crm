@@ -43,5 +43,11 @@ export function useInquiryDetail(inquiryId: string | undefined) {
     onSuccess: refresh,
   });
 
-  return { detail, addNote, deleteNote, assign };
+  const reply = useMutation({
+    mutationFn: (input: { subject: string; body: string }) =>
+      api.post<{ note: InquiryNote }>(`/inquiries/${inquiryId ?? ''}/reply`, input),
+    onSuccess: refresh,
+  });
+
+  return { detail, addNote, deleteNote, assign, reply };
 }

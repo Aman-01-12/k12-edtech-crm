@@ -10,22 +10,30 @@ import {
   inquiryIdParamSchema,
   inquiryNoteParamsSchema,
   listInquiriesQuerySchema,
+  replyToInquirySchema,
   updateInquiryStatusSchema,
   type AssignInquiry,
   type CreateInquiry,
   type CreateNote,
   type ListInquiriesQuery,
+  type ReplyToInquiry,
   type UpdateInquiryStatus,
 } from '@k12/contracts';
 import { z } from 'zod';
 import { config } from '../../config/env.js';
-import { NotFoundError, TokenInvalidError, ValidationError } from '../../errors/app-error.js';
+import {
+  EmailNotSentError,
+  NotFoundError,
+  TokenInvalidError,
+  ValidationError,
+} from '../../errors/app-error.js';
+import { sendInquiryReply } from '../../lib/email.js';
 import { findLiveAdminById } from '../auth/admin.repository.js';
 import type { AuthenticatedAdminPrincipal } from '../../middleware/require-admin.js';
 import { encodeCsvRow } from '../../lib/csv.js';
 import { requireCsrfToken } from '../../middleware/csrf.js';
 import { honeypot } from '../../middleware/honeypot.js';
-import { exportLimiter, submitLimiter } from '../../middleware/rate-limit.js';
+import { exportLimiter, replyLimiter, submitLimiter } from '../../middleware/rate-limit.js';
 import { requireAdmin } from '../../middleware/require-admin.js';
 import { validateBody, validateParams, validateQuery } from '../../middleware/validate.js';
 import { recordSecurityEvent } from '../auth/security-event.repository.js';
@@ -273,6 +281,72 @@ inquiriesRouter.patch(
     );
 
     res.status(200).json({ inquiry: updated });
+  },
+);
+
+/**
+ * Emails the applicant a staff reply.
+ *
+ * The recipient is read from the enquiry row named in the path and never from
+ * the request body, so this cannot be pointed at an arbitrary address and used
+ * as an open relay. The sent copy is stored so the file shows what the
+ * applicant was actually told.
+ */
+inquiriesRouter.post(
+  '/:id/reply',
+  requireAdmin,
+  requireCsrfToken,
+  replyLimiter,
+  validateParams(inquiryIdParamSchema),
+  validateBody(replyToInquirySchema),
+  async (req, res) => {
+    const admin = requireAdminPrincipal(req);
+    const { id } = req.validatedParams as { id: string };
+    const { subject, body } = req.body as ReplyToInquiry;
+
+    const inquiry = await findInquiryById(id);
+    if (inquiry === undefined) {
+      throw new NotFoundError('inquiry');
+    }
+
+    const sent = await sendInquiryReply({
+      to: inquiry.email,
+      replyTo: admin.email,
+      subject,
+      body,
+      applicantName: inquiry.fullName,
+    });
+
+    // Surfaced, unlike the password-reset email: a staff member who thinks
+    // they have answered someone must not be told so wrongly.
+    if (!sent) {
+      throw new EmailNotSentError();
+    }
+
+    // Recorded only after the provider accepted it, so the thread cannot show
+    // a reply that never left.
+    const note = await insertInquiryNote({
+      inquiryId: id,
+      adminId: admin.adminId,
+      authorName: admin.fullName,
+      body,
+      subject,
+    });
+
+    await recordSecurityEvent(
+      {
+        eventType: 'inquiry_replied',
+        adminId: admin.adminId,
+        ipAddress: req.ip,
+        requestId: req.requestId,
+        // Subject only. The message body and the applicant's address stay out
+        // of the security log, same rule as everywhere else.
+        detail: { inquiryId: id, noteId: note.id, subject },
+      },
+      (error) => req.log.error({ err: error }, 'Failed to record reply'),
+    );
+
+    res.status(201).json({ note });
   },
 );
 

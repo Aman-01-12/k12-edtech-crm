@@ -175,6 +175,23 @@ export class RateLimitedError extends AppError {
 }
 
 /**
+ * The email provider refused the message or could not be reached.
+ *
+ * 502 rather than 500: the caller's request was valid and the fault is in an
+ * upstream service. Surfaced to the user, unlike the password-reset email's
+ * silent failure, because a staff member who believes they have answered an
+ * applicant must not be told so wrongly.
+ */
+export class EmailNotSentError extends AppError {
+  readonly status = 502;
+  readonly code = API_ERROR_CODES.emailNotSent;
+
+  constructor() {
+    super('The email could not be sent. Please try again, or contact them directly.');
+  }
+}
+
+/**
  * An unexpected failure.
  *
  * Constructed by the error middleware for anything that is not an `AppError`.

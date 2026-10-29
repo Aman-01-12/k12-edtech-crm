@@ -36,6 +36,7 @@ export const API_ERROR_CODES = {
   conflict: 'CONFLICT',
   payloadTooLarge: 'PAYLOAD_TOO_LARGE',
   rateLimited: 'RATE_LIMITED',
+  emailNotSent: 'EMAIL_NOT_SENT',
   internalError: 'INTERNAL_ERROR',
 } as const;
 

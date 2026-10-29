@@ -70,7 +70,8 @@ Behind sign-in.
 - **Assign an owner**, or hand it back to nobody.
 - **Add internal notes**, visible only to staff, each keeping its author's name even after that account is deactivated. An author can delete their own notes; nobody else can.
 - **See the history**: every status change, assignment and note action, with who did it and when, read from the append-only audit log rather than a second store that could disagree with it.
-- **Call or email** the submitter directly from the record.
+- **Reply by email from the app**, which actually sends rather than handing off to a `mailto:` link that does nothing on a machine with no mail client. The reply goes out on the verified sending domain with the staff member's own address as `Reply-To`, so the applicant's answer reaches a person. The sent copy is stored in the same thread as the notes and marked **Emailed**, and cannot be deleted, because it has already left.
+- **Call** the submitter directly from the record.
 - **Summary counts** per status, which double as the status filter: the number you want to act on is the control that filters to it.
 - **Export to CSV**, respecting the current filter, with spreadsheet formula injection neutralised.
 - **Manage admins**: list, invite (the server generates the password and shows it once), deactivate. There is no public sign-up.
@@ -299,6 +300,7 @@ Base path `/api/v1`. All bodies are JSON. All responses carry `X-Request-Id`.
 | `PATCH` | `/api/v1/inquiries/:id/assignment` | set or clear the owner |
 | `POST` | `/api/v1/inquiries/:id/notes` | add an internal note |
 | `DELETE` | `/api/v1/inquiries/:id/notes/:noteId` | delete a note, authors only |
+| `POST` | `/api/v1/inquiries/:id/reply` | email the applicant; recipient read from the record, never the request |
 | `GET` | `/api/v1/admins` | list active admins |
 | `POST` | `/api/v1/admins` | create an admin; returns the generated password once |
 | `DELETE` | `/api/v1/admins/:id` | deactivate an admin and revoke its sessions |
@@ -470,7 +472,7 @@ It is idempotent and has been applied to both PostgreSQL 15 and PostgreSQL 17; t
 | Table | |
 |---|---|
 | `admins` | accounts; bcrypt hash, soft-deleted via `deleted_at` because the audit log and the inquiry status trail reference them |
-| `inquiry_notes` | internal staff notes, with the author's name snapshotted so attribution survives deactivation |
+| `inquiry_notes` | internal staff notes and sent replies in one thread, with the author's name snapshotted so attribution survives deactivation |
 | `password_reset_tokens` | SHA-256 digests, single-use, time-limited |
 | `inquiries` | submissions, with status and an audit of who changed it when |
 | `refresh_tokens` | SHA-256 digests, `family_id`, `predecessor_id` chain, `revoked_at` |
@@ -639,7 +641,8 @@ The point is not to prove the choice was right, but to show it was a choice rath
 
 Stated plainly, because an unstated limit reads as an oversight.
 
-- **Email is used for password reset only.** There are no notification or digest emails, and a new admin's generated password is still shown once in the UI for the inviting admin to pass on rather than emailed. The operator reset command remains the fallback for when delivery fails. [ADR 0013](docs/adr/0013-password-reset-by-email.md) records why this reversed an earlier "no email provider" constraint.
+- **Email covers password reset and replying to an applicant.** There are no notification or digest emails, and a new admin's generated password is still shown once in the UI for the inviting admin to pass on rather than emailed. The operator reset command remains the fallback for when delivery fails. [ADR 0013](docs/adr/0013-password-reset-by-email.md) records why this reversed an earlier "no email provider" constraint.
+- **A reply is one message, not a mailbox.** There is no threading of the applicant's response back into the record: their reply goes to the staff member's own inbox, because `Reply-To` is set to that address. Pulling responses back in would need inbound-mail webhooks, which is a larger feature than this assessment calls for.
 - **A reset request cannot confirm whether an address has an account**, by design. What no implementation of this feature can hide is whether an email actually arrives, from someone who controls the destination inbox; that limit is stated rather than glossed over.
 - **Phone validation is India-only.** It matches the audience, and E.164 storage means widening it later is a schema-compatible change. [ADR 0006](docs/adr/0006-phone-number-validation.md) records the upgrade path.
 - **One privilege level.** Every admin can manage admins. With a single internal team this is honest; a column with one possible value is an unused field pretending to be a feature. [ADR 0010](docs/adr/0010-admin-management-authorization.md).
