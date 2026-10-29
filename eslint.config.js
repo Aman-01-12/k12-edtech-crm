@@ -89,13 +89,25 @@ export default [
 
   js.configs.recommended,
 
-  // Type-checked rules, scoped to the TypeScript we author.
+  // Type-checked rules, scoped to the TypeScript we author. `tests/**` is
+  // included so tests are held to the same bar locally; it is gitignored, so in
+  // the delivered tree the glob simply matches nothing.
   ...tseslint.configs.recommendedTypeChecked.map((config) => ({
     ...config,
-    files: ['packages/*/src/**/*.ts', 'backend/src/**/*.ts', 'frontend/src/**/*.{ts,tsx}'],
+    files: [
+      'packages/*/src/**/*.ts',
+      'backend/src/**/*.ts',
+      'frontend/src/**/*.{ts,tsx}',
+      'tests/**/*.ts',
+    ],
   })),
   {
-    files: ['packages/*/src/**/*.ts', 'backend/src/**/*.ts', 'frontend/src/**/*.{ts,tsx}'],
+    files: [
+      'packages/*/src/**/*.ts',
+      'backend/src/**/*.ts',
+      'frontend/src/**/*.{ts,tsx}',
+      'tests/**/*.ts',
+    ],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -157,7 +169,7 @@ export default [
   },
 
   {
-    files: ['backend/src/**/*.ts', 'packages/*/src/**/*.ts'],
+    files: ['backend/src/**/*.ts', 'packages/*/src/**/*.ts', 'tests/**/*.ts'],
     languageOptions: { globals: globals.node },
   },
   {
