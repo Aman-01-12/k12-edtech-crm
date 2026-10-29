@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { InquiryDetail, InquiryNote } from '@k12/contracts';
+import type { Inquiry, InquiryDetail, InquiryNote, Page } from '@k12/contracts';
 import { api } from '../../lib/api-client';
 
 /**
@@ -37,9 +37,61 @@ export function useInquiryDetail(inquiryId: string | undefined) {
     onSuccess: refresh,
   });
 
+  /**
+   * Optimistic, like the status rail.
+   *
+   * `assignedToName` is passed in rather than derived here because only the
+   * caller holds the admin list; the server resolves the name itself from the
+   * id, so this value is a prediction that `onSuccess` then reconciles.
+   */
   const assign = useMutation({
-    mutationFn: (assignedToAdminId: string | null) =>
-      api.patch(`/inquiries/${inquiryId ?? ''}/assignment`, { assignedToAdminId }),
+    mutationFn: (input: { assignedToAdminId: string | null; assignedToName: string | null }) =>
+      api.patch(`/inquiries/${inquiryId ?? ''}/assignment`, {
+        assignedToAdminId: input.assignedToAdminId,
+      }),
+
+    onMutate: async (input) => {
+      await queryClient.cancelQueries({ queryKey: key });
+
+      const previousDetail = queryClient.getQueryData<InquiryDetail>(key);
+      // Every list page currently cached, because the row may be on any of them.
+      const previousLists = queryClient.getQueriesData<Page<Inquiry>>({
+        queryKey: ['inquiries'],
+      });
+
+      const owner = {
+        assignedToAdminId: input.assignedToAdminId,
+        assignedToName: input.assignedToName,
+      };
+
+      queryClient.setQueryData<InquiryDetail>(key, (current) =>
+        current === undefined ? current : { ...current, inquiry: { ...current.inquiry, ...owner } },
+      );
+
+      queryClient.setQueriesData<Page<Inquiry>>({ queryKey: ['inquiries'] }, (current) =>
+        current === undefined
+          ? current
+          : {
+              ...current,
+              items: current.items.map((item) =>
+                item.id === inquiryId ? { ...item, ...owner } : item,
+              ),
+            },
+      );
+
+      return { previousDetail, previousLists };
+    },
+
+    onError: (_error, _input, context) => {
+      if (context?.previousDetail !== undefined) {
+        queryClient.setQueryData(key, context.previousDetail);
+      }
+      for (const [listKey, data] of context?.previousLists ?? []) {
+        queryClient.setQueryData(listKey, data);
+      }
+    },
+
+    // Still refetched: the assignment adds a timeline entry this cannot predict.
     onSuccess: refresh,
   });
 

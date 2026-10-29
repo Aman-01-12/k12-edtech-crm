@@ -124,10 +124,16 @@ export function InquiryDetailPanel({
               <Section label="Owner">
                 <select
                   value={inquiry.assignedToAdminId ?? ''}
-                  disabled={assign.isPending}
-                  onChange={(event) =>
-                    assign.mutate(event.target.value === '' ? null : event.target.value)
-                  }
+                  onChange={(event) => {
+                    const id = event.target.value === '' ? null : event.target.value;
+                    assign.mutate({
+                      assignedToAdminId: id,
+                      assignedToName:
+                        id === null
+                          ? null
+                          : (admins.find((entry) => entry.id === id)?.fullName ?? null),
+                    });
+                  }}
                   className={`${selectClass} max-w-xs`}
                   style={selectStyle}
                   aria-label="Assign this enquiry"
