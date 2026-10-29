@@ -3,10 +3,10 @@ import { z } from 'zod';
 /**
  * Domain vocabulary shared by the API, the database and the UI.
  *
- * The string values are the exact labels of the Postgres enum types declared in
- * `schema.sql`. Changing one of these arrays without changing the matching
- * `CREATE TYPE` is a breaking change, so they are kept in one place rather than
- * restated per layer.
+ * The string values are the exact values permitted by the CHECK constraints on
+ * the matching columns in `schema.sql`. Changing one of these arrays without
+ * changing that constraint is a breaking change, so they are declared once here
+ * rather than restated per layer.
  */
 
 export const USER_TYPES = ['parent', 'student', 'school'] as const;
