@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Format, lint, type-check, test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # `npm ci` rather than `npm install`, so the committed lockfile is what
+      # gets installed and the build is reproducible.
+      - name: Install
+        run: npm ci
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Blocks on a high or critical advisory. Moderate findings are reported
+      # without failing, because a transitive dev-only moderate should not stop
+      # a security fix from shipping.
+      - name: Audit
+        run: npm audit --audit-level=high
+
+  schema:
+    name: Schema applies cleanly and is idempotent
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: k12_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Applied twice: the second run proves the script is a no-op rather than
+      # an error, which is what makes it safe to re-run against a live database.
+      - name: Apply schema, then apply it again
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d k12_ci -v ON_ERROR_STOP=1 -f schema.sql
+          psql -h localhost -U postgres -d k12_ci -v ON_ERROR_STOP=1 -f schema.sql
+
+      - name: Confirm the expected objects exist
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d k12_ci -tAc "
+            select case
+              when count(*) = 5 then 'ok: all 5 tables present'
+              else 'MISSING TABLES: only ' || count(*) || ' of 5'
+            end
+            from information_schema.tables
+            where table_schema = 'public'
+              and table_name in ('admins','inquiries','refresh_tokens','security_events','rate_limit_hits')
+          " | tee /dev/stderr | grep -q '^ok:'
