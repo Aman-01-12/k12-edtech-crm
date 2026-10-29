@@ -14,8 +14,8 @@ No authentication provider or ORM is used.
 
 | | |
 |---|---|
-| **Application** | _filled in below once deployed_ |
-| **API health** | _filled in below once deployed_ |
+| **Application** | https://k12-edtech-crm.vercel.app |
+| **API health** | https://k12-edtech-crm.vercel.app/api/health |
 
 Sign in on the **Admin** link in the header.
 
