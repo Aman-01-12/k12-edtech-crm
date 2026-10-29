@@ -24,7 +24,10 @@ Sign in on the **Staff sign in** link in the header.
 | | |
 |---|---|
 | Email | `demo.admin@example.com` |
-| Password | _supplied in the submission email, not committed_ |
+| Password | `LocalDev-Password-9` |
+
+These are review credentials for a disposable demo database holding fabricated enquiries, published so the dashboard can be opened without waiting on a reply.
+They are not used anywhere else, and the account can be rotated from **Settings** once signed in.
 
 ---
 
