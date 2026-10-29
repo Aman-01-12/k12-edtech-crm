@@ -202,6 +202,9 @@ export async function rotateRefreshToken(
 
     if (stored.revoked_at !== null) {
       const revokedCount = await revokeFamily(stored.family_id, client);
+      // Revoking the family only stops renewal; access tokens already issued
+      // stay valid until they expire, which is too long to leave a thief in.
+      await invalidateSessionsBefore(stored.admin_id, client);
       return {
         kind: 'replayed',
         adminId: stored.admin_id,
@@ -223,7 +226,8 @@ export async function rotateRefreshToken(
     );
     const adminRow = admin.rows[0];
     if (adminRow === undefined) {
-      // The account was deactivated while the session was live.
+      // The account was deactivated while the session was live. `requireAdmin`
+      // rejects a deactivated admin per request, so no session cutoff is needed.
       await revokeFamily(stored.family_id, client);
       return { kind: 'account_gone' } as const;
     }

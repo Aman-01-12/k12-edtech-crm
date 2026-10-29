@@ -1673,6 +1673,7 @@ async function rotateRefreshToken(presentedToken, context) {
     }
     if (stored.revoked_at !== null) {
       const revokedCount = await revokeFamily(stored.family_id, client);
+      await invalidateSessionsBefore(stored.admin_id, client);
       return {
         kind: "replayed",
         adminId: stored.admin_id,
