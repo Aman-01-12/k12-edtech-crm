@@ -8,6 +8,7 @@ import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 import { requestContext } from './middleware/request-context.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { healthRouter } from './modules/health/health.routes.js';
+import { inquiriesRouter } from './modules/inquiries/inquiries.routes.js';
 
 /**
  * Builds the Express application.
@@ -100,6 +101,7 @@ export function createApp(): Express {
 
   app.use('/api/health', healthRouter);
   app.use('/api/v1/auth', authRouter);
+  app.use('/api/v1/inquiries', inquiriesRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

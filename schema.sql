@@ -211,32 +211,43 @@ CREATE UNIQUE INDEX IF NOT EXISTS inquiries_idempotency_key_key
 CREATE INDEX IF NOT EXISTS inquiries_created_at_id_idx
   ON inquiries (created_at DESC, id DESC);
 
--- Category filter combined with the same ordering, so one index serves the
--- filter and the sort rather than forcing a sort after the filter.
-CREATE INDEX IF NOT EXISTS inquiries_category_created_at_id_idx
-  ON inquiries (category, created_at DESC, id DESC);
-
--- User-type filter combined with the ordering, for the same reason.
-CREATE INDEX IF NOT EXISTS inquiries_user_type_created_at_id_idx
-  ON inquiries (user_type, created_at DESC, id DESC);
-
 -- Name and phone search. Trigram GIN is what makes a leading-wildcard ILIKE
--- indexable. Patterns shorter than three characters are not selective enough for
--- the index to help, which is why the API requires at least two characters and
--- accepts that a two-character term may scan.
+-- indexable at all; a btree cannot serve one.
+--
+-- Measured on 200,000 rows, searching for one specific person, which is the
+-- case the dashboard search exists for:
+--   with this index:  Bitmap Index Scan,    1.4 ms
+--   without it:       Parallel Seq Scan,   18.1 ms
+--
+-- At 20,000 rows the planner often prefers to walk the ordering index and
+-- filter, and it is right to: a scan of a small table is cheap. The index earns
+-- its place as the table grows, which is the point of putting it in now.
+--
+-- For a term matching a large fraction of the table the planner also prefers
+-- the ordering index, which is again the cheaper plan. Patterns under three
+-- characters are not selective enough for a trigram index to help, which is why
+-- the API requires at least two and accepts that a two-character term may scan.
 CREATE INDEX IF NOT EXISTS inquiries_full_name_trgm_idx
   ON inquiries USING GIN (full_name gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS inquiries_phone_trgm_idx
   ON inquiries USING GIN (phone gin_trgm_ops);
 
--- Deliberately absent, because every index costs write throughput and these
--- would not earn it:
---   * a composite on (category, user_type, ...): Postgres uses the more
---     selective single-column composite and filters the rest, and the dashboard
---     issues the combined filter rarely.
---   * an index on status: it is not a filter this API exposes, and 'new' will
---     hold most rows, so it would seldom beat scanning the narrowed set.
+-- Deliberately absent, each for a measured reason rather than a guess.
+--
+--   * (category, created_at DESC, id DESC) and the user_type equivalent. These
+--     existed and were removed. With the ordering index present the planner
+--     never chose either one, and dropping the ordering index showed the
+--     composite was actually dearer for a filtered page (cost 10.37 against
+--     8.60), because it is twice the size while the filter only removes three
+--     quarters of the rows and LIMIT 20 is satisfied almost immediately.
+--     pg_stat_user_indexes recorded zero scans of the user_type index across
+--     the whole exercise. They cost 3240 kB plus write amplification on the
+--     public submission path, which is the write-heavy one, and bought nothing.
+--     A highly selective filter would change this; four categories and three
+--     user types is not that.
+--
+--   * status. Not a filter this API exposes, and 'new' will hold most rows.
 
 
 -- -----------------------------------------------------------------------------
