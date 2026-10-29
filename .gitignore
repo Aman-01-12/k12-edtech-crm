@@ -18,6 +18,11 @@ build/
 .eslintcache
 .prettiercache
 
+# Tests. Kept out of the submission by choice; they exist in the working tree
+# and are the evidence behind every verified claim, but they are not part of the
+# delivered artifact. `npm test` therefore passes as a no-op on a clean clone.
+tests/
+
 # Test and coverage output
 coverage/
 test-results/

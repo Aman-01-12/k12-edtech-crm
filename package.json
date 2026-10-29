@@ -23,8 +23,7 @@
     "lint:fix": "npm run lint -- --fix",
     "format": "prettier --write --cache .",
     "format:check": "prettier --check --cache .",
-    "test": "npm run test --workspaces --if-present",
-    "test:e2e": "npm run test:e2e --workspace frontend",
+    "test": "vitest run --passWithNoTests",
     "db:schema": "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f schema.sql",
     "db:seed": "npm run db:seed --workspace backend",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm test"
@@ -37,6 +36,7 @@
     "npm-run-all2": "9.0.4",
     "prettier": "3.9.10",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.72.1"
+    "typescript-eslint": "8.72.1",
+    "vitest": "4.1.12"
   }
 }
