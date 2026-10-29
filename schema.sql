@@ -1,0 +1,471 @@
+-- =============================================================================
+-- K12 Hunar EdTech CRM and Inquiry System - complete database schema
+--
+-- Target: PostgreSQL 13 or newer (Supabase runs 15+).
+-- Apply with:  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema.sql
+--
+-- This script is the single authoritative definition of the schema and is
+-- idempotent: running it a second time against the same database is a no-op
+-- rather than an error.
+--
+-- Two principles shape everything below.
+--
+--   1. The database is the last line of defence, not a dumb store. Every rule
+--      the application enforces is also a constraint here, so an invalid row
+--      cannot exist even if it is inserted by a direct connection or by a
+--      future bug in the API.
+--
+--   2. Credentials are never stored in a reversible form. Passwords are bcrypt
+--      hashes and refresh tokens are SHA-256 digests, both enforced by CHECK
+--      constraints so a plaintext value is rejected by the column itself.
+--
+-- No seed data, no credentials and no secrets appear in this file. Provision the
+-- first admin with `npm run db:seed`, which reads ADMIN_EMAIL and ADMIN_PASSWORD
+-- from the environment.
+-- =============================================================================
+
+
+-- -----------------------------------------------------------------------------
+-- Extensions
+-- -----------------------------------------------------------------------------
+
+-- Trigram indexing, which is what lets the dashboard's `ILIKE '%term%'` name and
+-- phone search use an index instead of scanning the table. Postgres cannot use a
+-- standard btree index for a leading-wildcard pattern.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- `gen_random_uuid()` is core since PostgreSQL 13, so pgcrypto is deliberately
+-- not required here.
+
+
+-- -----------------------------------------------------------------------------
+-- Shared trigger function
+-- -----------------------------------------------------------------------------
+
+-- Maintains `updated_at` in the database rather than in application code, so the
+-- timestamp is correct no matter which client performed the update.
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$;
+
+
+-- -----------------------------------------------------------------------------
+-- admins
+--
+-- Staff accounts that can sign in to the dashboard. There is no public sign-up
+-- and no self-service registration: accounts are provisioned deliberately.
+--
+-- There is no role column on purpose. The system has exactly one kind of
+-- principal, so a role column would be an unused field, and authorization is
+-- "is a live admin" asserted from the verified token claim. Adding a second role
+-- later is a migration, which is the right amount of friction for a change that
+-- alters the access model.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS admins (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  email         TEXT NOT NULL
+                CONSTRAINT admins_email_length CHECK (char_length(email) BETWEEN 3 AND 254)
+                CONSTRAINT admins_email_shape CHECK (email LIKE '%_@_%.__%'),
+
+  -- A bcrypt modular-crypt digest, never a password. The pattern pins the
+  -- `$2a$`, `$2b$` or `$2y$` prefix and the two-digit cost, so storing a
+  -- plaintext password here fails at the database level.
+  password_hash TEXT NOT NULL
+                CONSTRAINT admins_password_hash_is_bcrypt
+                CHECK (password_hash ~ '^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$'),
+
+  full_name     TEXT NOT NULL
+                CONSTRAINT admins_full_name_length CHECK (char_length(full_name) BETWEEN 2 AND 120),
+
+  -- Present from the first schema even though verification is not enforced yet,
+  -- so switching it on later is a code change rather than a migration.
+  email_verified_at TIMESTAMPTZ,
+
+  last_login_at TIMESTAMPTZ,
+
+  -- Soft delete. Accounts are never hard-deleted, because the security event log
+  -- and the inquiry status trail reference them.
+  deleted_at    TIMESTAMPTZ,
+
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Uniqueness on the lowercased address, scoped to live accounts. Case-sensitive
+-- uniqueness would allow `Admin@k12.com` and `admin@k12.com` to coexist and then
+-- make sign-in depend on exactly how the address was typed.
+CREATE UNIQUE INDEX IF NOT EXISTS admins_email_lower_key
+  ON admins (LOWER(email))
+  WHERE deleted_at IS NULL;
+
+DROP TRIGGER IF EXISTS admins_set_updated_at ON admins;
+CREATE TRIGGER admins_set_updated_at
+  BEFORE UPDATE ON admins
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+
+-- -----------------------------------------------------------------------------
+-- inquiries
+--
+-- The table both surfaces share: written by anonymous visitors through the
+-- public form, read and triaged by authenticated admins.
+--
+-- The three enum-like columns are TEXT with CHECK constraints rather than native
+-- enum types. Adding a permitted value then requires an explicit migration
+-- instead of an `ALTER TYPE`, and the driver needs no type-parsing special case.
+-- The permitted values are the exact strings in packages/contracts/src/enums.ts.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS inquiries (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  user_type   TEXT NOT NULL
+              CONSTRAINT inquiries_user_type_valid
+              CHECK (user_type IN ('parent', 'student', 'school')),
+
+  category    TEXT NOT NULL
+              CONSTRAINT inquiries_category_valid
+              CHECK (category IN ('scholarship', 'concert', 'admission', 'general_query')),
+
+  status      TEXT NOT NULL DEFAULT 'new'
+              CONSTRAINT inquiries_status_valid
+              CHECK (status IN ('new', 'in_progress', 'resolved', 'closed')),
+
+  full_name   TEXT NOT NULL
+              CONSTRAINT inquiries_full_name_length
+              CHECK (char_length(full_name) BETWEEN 2 AND 120),
+
+  email       TEXT NOT NULL
+              CONSTRAINT inquiries_email_length CHECK (char_length(email) BETWEEN 3 AND 254)
+              CONSTRAINT inquiries_email_shape CHECK (email LIKE '%_@_%.__%'),
+
+  -- E.164 for India, enforced here and not only in the validator. The admin
+  -- phone search is a substring match, so it is only reliable if every stored
+  -- number has exactly one possible representation.
+  phone       TEXT NOT NULL
+              CONSTRAINT inquiries_phone_is_e164_india
+              CHECK (phone ~ '^\+91[6-9][0-9]{9}$'),
+
+  message     TEXT NOT NULL
+              CONSTRAINT inquiries_message_length
+              CHECK (char_length(message) BETWEEN 10 AND 2000),
+
+  -- Client-supplied key that makes a retried submission idempotent. The partial
+  -- unique index below is the actual exactly-once guarantee; see 0005.
+  idempotency_key UUID,
+
+  -- Who last moved this inquiry along, and when. SET NULL rather than CASCADE
+  -- because the record of the change must outlive the account that made it.
+  status_updated_at TIMESTAMPTZ,
+  status_updated_by UUID REFERENCES admins (id) ON DELETE SET NULL,
+
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  -- A status change must always record when it happened, so the audit trail
+  -- cannot be half-written.
+  CONSTRAINT inquiries_status_change_is_complete
+  CHECK ((status_updated_at IS NULL) = (status_updated_by IS NULL))
+);
+
+DROP TRIGGER IF EXISTS inquiries_set_updated_at ON inquiries;
+CREATE TRIGGER inquiries_set_updated_at
+  BEFORE UPDATE ON inquiries
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Exactly-once submission. Partial, so the overwhelming majority of rows (those
+-- submitted without a key) cost nothing and are not forced to collide on NULL.
+CREATE UNIQUE INDEX IF NOT EXISTS inquiries_idempotency_key_key
+  ON inquiries (idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+-- Default dashboard ordering and the keyset pagination predicate
+-- `(created_at, id) < ($1, $2)`. `id` is in the key so that two inquiries
+-- sharing a timestamp cannot cause a row to be skipped or repeated across pages.
+CREATE INDEX IF NOT EXISTS inquiries_created_at_id_idx
+  ON inquiries (created_at DESC, id DESC);
+
+-- Category filter combined with the same ordering, so one index serves the
+-- filter and the sort rather than forcing a sort after the filter.
+CREATE INDEX IF NOT EXISTS inquiries_category_created_at_id_idx
+  ON inquiries (category, created_at DESC, id DESC);
+
+-- User-type filter combined with the ordering, for the same reason.
+CREATE INDEX IF NOT EXISTS inquiries_user_type_created_at_id_idx
+  ON inquiries (user_type, created_at DESC, id DESC);
+
+-- Name and phone search. Trigram GIN is what makes a leading-wildcard ILIKE
+-- indexable. Patterns shorter than three characters are not selective enough for
+-- the index to help, which is why the API requires at least two characters and
+-- accepts that a two-character term may scan.
+CREATE INDEX IF NOT EXISTS inquiries_full_name_trgm_idx
+  ON inquiries USING GIN (full_name gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS inquiries_phone_trgm_idx
+  ON inquiries USING GIN (phone gin_trgm_ops);
+
+-- Deliberately absent, because every index costs write throughput and these
+-- would not earn it:
+--   * a composite on (category, user_type, ...): Postgres uses the more
+--     selective single-column composite and filters the rest, and the dashboard
+--     issues the combined filter rarely.
+--   * an index on status: it is not a filter this API exposes, and 'new' will
+--     hold most rows, so it would seldom beat scanning the narrowed set.
+
+
+-- -----------------------------------------------------------------------------
+-- refresh_tokens
+--
+-- Server-side session state for the two-token auth model. Access tokens are
+-- stateless JWTs; refresh tokens are opaque random values recorded here so that
+-- a session can actually be revoked.
+--
+-- Adapted from the reference design in docs/reference/, keeping its structure:
+-- digest-only storage, a family id per sign-in, a predecessor chain, and
+-- revocation by timestamp rather than by deleting the row.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  admin_id      UUID NOT NULL REFERENCES admins (id) ON DELETE CASCADE,
+
+  -- SHA-256 of the raw 32-byte token. A plain digest rather than bcrypt is
+  -- correct here precisely because the input is 32 bytes of CSPRNG output:
+  -- there is no low-entropy guess space that a slow hash would protect.
+  -- The length CHECK rejects anything that is not a 32-byte digest, so the raw
+  -- token cannot be stored by mistake.
+  token_hash    BYTEA NOT NULL UNIQUE
+                CONSTRAINT refresh_tokens_hash_is_sha256
+                CHECK (octet_length(token_hash) = 32),
+
+  -- Every rotation of one sign-in shares this. Presenting an already-revoked
+  -- token means the family is compromised and all of its siblings are revoked.
+  family_id     UUID NOT NULL,
+
+  -- The token this one replaced. Walking the chain reconstructs the full
+  -- rotation history of a session.
+  predecessor_id UUID REFERENCES refresh_tokens (id) ON DELETE SET NULL,
+
+  -- Soft device context, for recognising an anomalous rotation. Never used as a
+  -- security control, only as evidence.
+  user_agent    TEXT CONSTRAINT refresh_tokens_user_agent_length
+                CHECK (user_agent IS NULL OR char_length(user_agent) <= 400),
+  ip_address    INET,
+
+  issued_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at    TIMESTAMPTZ NOT NULL,
+
+  -- NULL means active. A timestamp means revoked; the row is kept for the trail.
+  revoked_at    TIMESTAMPTZ,
+
+  CONSTRAINT refresh_tokens_expires_after_issue CHECK (expires_at > issued_at)
+);
+
+-- Sign-out and "revoke every session for this admin". Partial, because revoked
+-- rows are never the target of this lookup.
+CREATE INDEX IF NOT EXISTS refresh_tokens_admin_active_idx
+  ON refresh_tokens (admin_id)
+  WHERE revoked_at IS NULL;
+
+-- Family-wide revocation on theft detection. Not partial: this lookup must find
+-- the already-revoked siblings too, which is the whole point.
+CREATE INDEX IF NOT EXISTS refresh_tokens_family_idx
+  ON refresh_tokens (family_id);
+
+-- Expiry sweeping.
+CREATE INDEX IF NOT EXISTS refresh_tokens_expires_at_idx
+  ON refresh_tokens (expires_at)
+  WHERE revoked_at IS NULL;
+
+-- There is deliberately no partial index on (token_hash) WHERE revoked_at IS
+-- NULL. The UNIQUE constraint above already creates a btree on token_hash that
+-- serves the rotation lookup, and the rotation path must read revoked rows
+-- anyway to detect reuse, so a partial index would be both redundant and wrong
+-- for the query that matters.
+
+
+-- -----------------------------------------------------------------------------
+-- security_events
+--
+-- Append-only record of security-relevant actions. No `updated_at` and no
+-- trigger: nothing in this table is ever modified. UPDATE and DELETE are
+-- revoked below so the application cannot rewrite its own history.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS security_events (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  event_type  TEXT NOT NULL
+              CONSTRAINT security_events_type_valid
+              CHECK (event_type IN (
+                'login_success',
+                'login_failure',
+                'logout',
+                'session_compromised',
+                'rate_limit_exceeded',
+                'inquiry_status_changed'
+              )),
+
+  -- SET NULL so an event outlives the account it refers to.
+  admin_id    UUID REFERENCES admins (id) ON DELETE SET NULL,
+
+  -- The address someone tried to sign in with. Recorded on failure, where there
+  -- may be no matching admin row to point at.
+  email_attempted TEXT CONSTRAINT security_events_email_attempted_length
+                  CHECK (email_attempted IS NULL OR char_length(email_attempted) <= 254),
+
+  ip_address  INET,
+  user_agent  TEXT CONSTRAINT security_events_user_agent_length
+              CHECK (user_agent IS NULL OR char_length(user_agent) <= 400),
+
+  -- Event-specific context. Never carries an inquiry's personal data; a row is
+  -- referenced by its id.
+  detail      JSONB NOT NULL DEFAULT '{}'::JSONB,
+
+  -- Correlates the event with the API response and the application log line.
+  request_id  UUID,
+
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS security_events_type_created_at_idx
+  ON security_events (event_type, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS security_events_admin_created_at_idx
+  ON security_events (admin_id, created_at DESC);
+
+
+-- -----------------------------------------------------------------------------
+-- rate_limit_hits
+--
+-- Fixed-window counters for the rate limiter. This lives in Postgres rather than
+-- in process memory because the API runs as a serverless function: an in-memory
+-- counter would be per-instance, which means the advertised limit would not be
+-- the enforced limit as soon as more than one instance is warm.
+--
+-- The composite primary key is what makes the increment atomic as a single
+-- INSERT ... ON CONFLICT DO UPDATE, with no read-modify-write race.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS rate_limit_hits (
+  -- Identifies the limited subject, for example 'submit:203.0.113.9' or
+  -- 'login:admin@example.com'. Opaque to the database.
+  bucket_key   TEXT NOT NULL
+               CONSTRAINT rate_limit_hits_bucket_key_length
+               CHECK (char_length(bucket_key) BETWEEN 1 AND 300),
+
+  -- Start of the fixed window, floored to the window size by the application.
+  window_start TIMESTAMPTZ NOT NULL,
+
+  hit_count    INTEGER NOT NULL DEFAULT 0
+               CONSTRAINT rate_limit_hits_count_non_negative CHECK (hit_count >= 0),
+
+  PRIMARY KEY (bucket_key, window_start)
+);
+
+-- Sweeping expired windows.
+CREATE INDEX IF NOT EXISTS rate_limit_hits_window_start_idx
+  ON rate_limit_hits (window_start);
+
+
+-- -----------------------------------------------------------------------------
+-- Lock out the hosting provider's auto-generated API
+--
+-- Supabase exposes every table in the `public` schema through a REST API backed
+-- by the `anon` and `authenticated` roles. This application does not use that
+-- API and all of these tables hold either credentials or third-party personal
+-- data, so those roles are stripped of access and row-level security is enabled
+-- with no policies granting them anything.
+--
+-- The application connects as the table owner, which is unaffected by RLS unless
+-- FORCE ROW LEVEL SECURITY is set, so this is pure defence in depth: it closes
+-- a door this application never walks through.
+--
+-- The role checks keep the script portable to a plain PostgreSQL instance, where
+-- those roles do not exist, so the same file can be used for local testing.
+-- -----------------------------------------------------------------------------
+
+ALTER TABLE inquiries       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admins          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE refresh_tokens  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rate_limit_hits ENABLE ROW LEVEL SECURITY;
+
+DO $$
+DECLARE
+  provider_role TEXT;
+BEGIN
+  FOREACH provider_role IN ARRAY ARRAY['anon', 'authenticated']
+  LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = provider_role) THEN
+      EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON TABLE inquiries, admins, refresh_tokens, security_events, rate_limit_hits FROM %I',
+        provider_role
+      );
+    END IF;
+  END LOOP;
+END;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- Enforce the append-only security log
+--
+-- REVOKE alone does not achieve this. A table's owner holds its privileges
+-- implicitly and cannot have them revoked, and this application connects as the
+-- owner, so a REVOKE here would look like a control while doing nothing. That
+-- was caught by asserting the constraint rather than trusting it.
+--
+-- A statement-level trigger does bind the owner. FOR EACH STATEMENT rather than
+-- FOR EACH ROW so that it fires even when the statement matches no rows, which
+-- means `DELETE FROM security_events` is an error rather than a quiet no-op.
+--
+-- The REVOKE is kept as well, because it still constrains any non-owner role the
+-- deployment might later connect with, and least privilege should not depend on
+-- the trigger being the only guard.
+-- -----------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION reject_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION 'Table %.% is append-only; % is not permitted',
+    TG_TABLE_SCHEMA, TG_TABLE_NAME, TG_OP
+    USING ERRCODE = 'restrict_violation';
+END;
+$$;
+
+REVOKE UPDATE, DELETE, TRUNCATE ON TABLE security_events FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS security_events_no_update ON security_events;
+CREATE TRIGGER security_events_no_update
+  BEFORE UPDATE ON security_events
+  FOR EACH STATEMENT EXECUTE FUNCTION reject_mutation();
+
+DROP TRIGGER IF EXISTS security_events_no_delete ON security_events;
+CREATE TRIGGER security_events_no_delete
+  BEFORE DELETE ON security_events
+  FOR EACH STATEMENT EXECUTE FUNCTION reject_mutation();
+
+DROP TRIGGER IF EXISTS security_events_no_truncate ON security_events;
+CREATE TRIGGER security_events_no_truncate
+  BEFORE TRUNCATE ON security_events
+  FOR EACH STATEMENT EXECUTE FUNCTION reject_mutation();
+
+
+-- =============================================================================
+-- End of schema.
+--
+-- Next steps:
+--   1. npm run db:seed     provision the first admin from ADMIN_EMAIL / ADMIN_PASSWORD
+--   2. npm run dev         start the API and the web app
+-- =============================================================================
