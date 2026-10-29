@@ -30,6 +30,21 @@ const INQUIRY_FROM = `
   left join admins owner on owner.id = i.assigned_to_admin_id
 `;
 
+/**
+ * The same columns, unqualified, for statements that have no FROM clause and
+ * therefore no alias to qualify against: `INSERT ... RETURNING` and
+ * `UPDATE ... RETURNING`.
+ *
+ * `assigned_to_name` is a literal null here because the owner's name lives in
+ * `admins` and cannot be reached without the join. Callers that need it re-read
+ * the row through `findInquiryById`.
+ */
+const INQUIRY_COLUMNS_UNQUALIFIED = `
+  id, user_type, category, status, full_name, email, phone, message,
+  created_at, status_updated_at, assigned_to_admin_id,
+  null::text as assigned_to_name
+`;
+
 interface InquiryRow extends Record<string, unknown> {
   id: string;
   user_type: string;
@@ -260,7 +275,7 @@ export async function createInquiry(
     `insert into inquiries (user_type, category, full_name, email, phone, message, idempotency_key)
      values ($1, $2, $3, $4, $5, $6, $7)
      on conflict (idempotency_key) where idempotency_key is not null do nothing
-     returning ${INQUIRY_COLUMNS}`,
+     returning ${INQUIRY_COLUMNS_UNQUALIFIED}`,
     [
       input.userType,
       input.category,
@@ -282,7 +297,7 @@ export async function createInquiry(
   }
 
   const existing = await client.query<InquiryRow>(
-    `select ${INQUIRY_COLUMNS} from inquiries where idempotency_key = $1 limit 1`,
+    `select ${INQUIRY_COLUMNS} ${INQUIRY_FROM} where i.idempotency_key = $1 limit 1`,
     [idempotencyKey],
   );
   const row = existing.rows[0];
@@ -308,10 +323,10 @@ export async function updateInquiryStatus(
   // record what it moved *from* without a second round trip.
   const { rows } = await client.query<InquiryRow & { previous_status: string }>(
     `with before as (select status from inquiries where id = $1)
-     update inquiries i
+     update inquiries
         set status = $2, status_updated_at = now(), status_updated_by = $3
-      where i.id = $1
-      returning ${INQUIRY_COLUMNS.replace('owner.full_name as assigned_to_name', 'null as assigned_to_name')},
+      where id = $1
+      returning ${INQUIRY_COLUMNS_UNQUALIFIED},
                 (select status from before) as previous_status`,
     [id, status, adminId],
   );

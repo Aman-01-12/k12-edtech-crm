@@ -179,6 +179,15 @@ export default [
     files: ['backend/src/**/*.ts', 'packages/*/src/**/*.ts', 'tests/**/*.ts'],
     languageOptions: { globals: globals.node },
   },
+
+  // Standalone check scripts under tests/. Run directly with tsx against a real
+  // database rather than through Vitest, so they are Node programs that report
+  // to stdout and set their own environment before importing anything.
+  {
+    files: ['tests/**/*.check.mjs'],
+    languageOptions: { globals: globals.node },
+    rules: { 'no-console': 'off', 'no-restricted-syntax': 'off' },
+  },
   {
     files: ['frontend/src/**/*.{ts,tsx}'],
     languageOptions: { globals: globals.browser },

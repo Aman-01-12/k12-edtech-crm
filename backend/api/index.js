@@ -1973,6 +1973,11 @@ var INQUIRY_FROM = `
   from inquiries i
   left join admins owner on owner.id = i.assigned_to_admin_id
 `;
+var INQUIRY_COLUMNS_UNQUALIFIED = `
+  id, user_type, category, status, full_name, email, phone, message,
+  created_at, status_updated_at, assigned_to_admin_id,
+  null::text as assigned_to_name
+`;
 function toInquiry(row) {
   return {
     id: row.id,
@@ -2105,7 +2110,7 @@ async function createInquiry(input, idempotencyKey, client = pool) {
     `insert into inquiries (user_type, category, full_name, email, phone, message, idempotency_key)
      values ($1, $2, $3, $4, $5, $6, $7)
      on conflict (idempotency_key) where idempotency_key is not null do nothing
-     returning ${INQUIRY_COLUMNS}`,
+     returning ${INQUIRY_COLUMNS_UNQUALIFIED}`,
     [
       input.userType,
       input.category,
@@ -2124,7 +2129,7 @@ async function createInquiry(input, idempotencyKey, client = pool) {
     throw new Error("Inquiry insert returned no row");
   }
   const existing = await client.query(
-    `select ${INQUIRY_COLUMNS} from inquiries where idempotency_key = $1 limit 1`,
+    `select ${INQUIRY_COLUMNS} ${INQUIRY_FROM} where i.idempotency_key = $1 limit 1`,
     [idempotencyKey]
   );
   const row = existing.rows[0];
@@ -2136,10 +2141,10 @@ async function createInquiry(input, idempotencyKey, client = pool) {
 async function updateInquiryStatus(id, status, adminId, client = pool) {
   const { rows } = await client.query(
     `with before as (select status from inquiries where id = $1)
-     update inquiries i
+     update inquiries
         set status = $2, status_updated_at = now(), status_updated_by = $3
-      where i.id = $1
-      returning ${INQUIRY_COLUMNS.replace("owner.full_name as assigned_to_name", "null as assigned_to_name")},
+      where id = $1
+      returning ${INQUIRY_COLUMNS_UNQUALIFIED},
                 (select status from before) as previous_status`,
     [id, status, adminId]
   );

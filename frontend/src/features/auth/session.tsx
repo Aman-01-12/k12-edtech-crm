@@ -4,9 +4,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
+import { useLocation } from 'react-router';
 import type { AuthenticatedAdmin } from '@k12/contracts';
 import { ApiRequestError, api, setSessionEndedHandler } from '../../lib/api-client';
 
@@ -50,9 +52,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /**
+   * Probed once, and only for the admin surface.
+   *
+   * The public form has no use for a session, so probing there spent a request
+   * on every visit to the busiest page and logged an expected 401 to the
+   * console, which reads like a fault. The ref makes it fire once rather than
+   * on every navigation within `/admin`.
+   */
+  const { pathname } = useLocation();
+  const needsSession = pathname.startsWith('/admin');
+  const probed = useRef(false);
+
   useEffect(() => {
+    if (!needsSession || probed.current) {
+      return;
+    }
+    probed.current = true;
     void refresh();
-  }, [refresh]);
+  }, [needsSession, refresh]);
 
   // The api client calls this when a session becomes unrecoverable, so a 401
   // deep inside any query drops the whole app to signed-out in one place.
